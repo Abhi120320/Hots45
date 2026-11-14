@@ -72,7 +72,7 @@ MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 db = duckdb.connect()
 if DATA_URL:  # read-only home on serverless: keep DuckDB's extension cache in /tmp
-    db.execute("SET extension_directory='/tmp/duckdb_ext'; INSTALL httpfs; LOAD httpfs")
+    db.execute("SET home_directory='/tmp'; SET extension_directory='/tmp/duckdb_ext'; INSTALL httpfs; LOAD httpfs")
 
 # Harmonization factors from meta.json, for the "MODIS x k" series: tile factor, else calendar-month, else global.
 TILE_DEG = META.get("tile_deg", 360)
