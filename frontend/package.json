@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "postbuild": "node -e \"const fs=require('fs');for(const c of ['calendar','timeline','monthly','before-after']){fs.mkdirSync('dist/view/'+c,{recursive:true});fs.copyFileSync('dist/index.html','dist/view/'+c+'/index.html')}\""
   },
   "dependencies": {
     "@deck.gl/aggregation-layers": "^9.4.1",
