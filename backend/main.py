@@ -390,6 +390,10 @@ def points_where(bbox, reg):
         params += [bbox[0], bbox[2], bbox[1], bbox[3]]
     if reg and reg[0] == "a":
         g = META["grid_deg"]
+        # the unit's bbox (padded one cell) lets DuckDB skip parquet row groups before the per-point lookup
+        r = ADMIN.df.iloc[reg[1]]
+        sql.append("pt.lon BETWEEN ? AND ? AND pt.lat BETWEEN ? AND ?")
+        params += [float(r.minx) - g, float(r.maxx) + g, float(r.miny) - g, float(r.maxy) + g]
         sql.append(f"EXISTS (SELECT 1 FROM cell_admin a WHERE a.lat = round((floor(pt.lat / {g}) + 0.5) * {g}, 4) "
                    f"AND a.lon = round((floor(pt.lon / {g}) + 0.5) * {g}, 4) AND a.adm{reg[2]}_id = ?)")
         params.append(reg[1])
