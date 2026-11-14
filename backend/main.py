@@ -22,22 +22,48 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))  # serverless entrypoints import this file directly, not as backend.main
 sys.path.insert(0, str(ROOT / "data_prep"))
 from fire_harmonize import all_months, anomalies  # noqa: E402  same analytics as the offline pipeline
 from backend.admin import Admin, circle, geocode  # noqa: E402
 from backend import alerts as alerts_engine  # noqa: E402
 
 DATA = Path(os.environ.get("APP_DATA", ROOT / "backend" / "app_data"))
+# Serverless (Vercel): DATA_URL is a base URL holding flat files (meta.json, cells*.parquet, admin*.parquet,
+# points_YYYY.parquet). Small files are cached in /tmp per instance; raw points are read over HTTP by DuckDB.
+DATA_URL = os.environ.get("DATA_URL", "").rstrip("/")
+if DATA_URL:
+    import urllib.request
+    DATA = Path("/tmp/app_data")
+    DATA.mkdir(parents=True, exist_ok=True)
+
+    def _fetch(name, required=True):
+        dst = DATA / name
+        if not dst.exists():
+            try:
+                urllib.request.urlretrieve(f"{DATA_URL}/{name}", f"{dst}.part")
+                os.replace(f"{dst}.part", dst)  # never leave a half-written file that later looks complete
+            except Exception:
+                if required:
+                    raise
+    _fetch("meta.json")
 META = json.loads((DATA / "meta.json").read_text())
-CELLS = str(DATA / "cells.parquet")
 COARSE_DEG = META.get("coarse_grid_deg")
+if DATA_URL:
+    for _n in ["cells.parquet", "admin.parquet", "cell_admin.parquet"] + ([f"cells_{COARSE_DEG}.parquet"] if COARSE_DEG else []):
+        _fetch(_n, required=_n == "cells.parquet")
+CELLS = str(DATA / "cells.parquet")
 COARSE = str(DATA / f"cells_{COARSE_DEG}.parquet") if COARSE_DEG else None
 if COARSE and not Path(COARSE).exists():
     COARSE = None
 _pts = DATA / "points.parquet"
-POINTS_PARTITIONED = _pts.is_dir()  # fire_harmonize writes points.parquet/year=YYYY/*.parquet
-POINTS = (f"read_parquet('{_pts}/*/*.parquet', hive_partitioning=true)" if POINTS_PARTITIONED
-          else f"read_parquet('{_pts}')")
+POINTS_PARTITIONED = not DATA_URL and _pts.is_dir()  # fire_harmonize writes points.parquet/year=YYYY/*.parquet
+if DATA_URL:
+    _urls = [f"'{DATA_URL}/points_{y}.parquet'" for y in range(int(META["first_month"][:4]), int(META["last_month"][:4]) + 1)]
+    POINTS = f"read_parquet([{', '.join(_urls)}])"
+else:
+    POINTS = (f"read_parquet('{_pts}/*/*.parquet', hive_partitioning=true)" if POINTS_PARTITIONED
+              else f"read_parquet('{_pts}')")
 MONTHS = list(all_months(META["first_month"], META["last_month"]))
 LAST_COMPLETE = META.get("last_complete_month", META["last_month"])
 GAP_MONTHS = META.get("gap_months", [])
@@ -45,6 +71,8 @@ NOTES = META.get("month_notes", {})
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 db = duckdb.connect()
+if DATA_URL:  # read-only home on serverless: keep DuckDB's extension cache in /tmp
+    db.execute("SET extension_directory='/tmp/duckdb_ext'; INSTALL httpfs; LOAD httpfs")
 
 # Harmonization factors from meta.json, for the "MODIS x k" series: tile factor, else calendar-month, else global.
 TILE_DEG = META.get("tile_deg", 360)
