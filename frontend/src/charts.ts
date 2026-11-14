@@ -135,22 +135,39 @@ export function downloadText(name: string, text: string, type = 'text/csv') {
   setTimeout(() => URL.revokeObjectURL(u), 1000)
 }
 
-/** Render an SVG element to a PNG at k x its viewBox size (dark background) and download it. */
-export function svgToPng(svg: SVGSVGElement, k: number, name: string) {
-  const vb = svg.viewBox.baseVal
-  const clone = svg.cloneNode(true) as SVGSVGElement
-  clone.setAttribute('width', String(vb.width * k))
-  clone.setAttribute('height', String(vb.height * k))
-  const src = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }))
-  const img = new Image()
-  img.onload = () => {
-    const c = Object.assign(document.createElement('canvas'), { width: vb.width * k, height: vb.height * k })
-    const ctx = c.getContext('2d')!
-    ctx.fillStyle = '#14171C'
-    ctx.fillRect(0, 0, c.width, c.height)
-    ctx.drawImage(img, 0, 0)
-    URL.revokeObjectURL(src)
-    Object.assign(document.createElement('a'), { href: c.toDataURL('image/png'), download: name }).click()
+/** Render an SVG element to a PNG at k x its viewBox size (dark background) and download it. Rejects on failure. */
+export function svgToPng(svg: SVGSVGElement, k: number, name: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const vb = svg.viewBox.baseVal
+    const clone = svg.cloneNode(true) as SVGSVGElement
+    clone.setAttribute('width', String(vb.width * k))
+    clone.setAttribute('height', String(vb.height * k))
+    const src = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }))
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const c = Object.assign(document.createElement('canvas'), { width: vb.width * k, height: vb.height * k })
+        const ctx = c.getContext('2d')!
+        ctx.fillStyle = '#14171C'
+        ctx.fillRect(0, 0, c.width, c.height)
+        ctx.drawImage(img, 0, 0)
+        Object.assign(document.createElement('a'), { href: c.toDataURL('image/png'), download: name }).click()
+        resolve()
+      } catch (e) { reject(e) } finally { URL.revokeObjectURL(src) }
+    }
+    img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('the chart image could not be rendered')) }
+    img.src = src
+  })
+}
+
+/** Fetch a server file and save it; throws with the server's reason (e.g. "too many hotspots") on failure. */
+export async function downloadUrl(u: string, name: string) {
+  const r = await fetch(u)
+  if (!r.ok) {
+    const detail = await r.json().then(j => j.detail as string).catch(() => `HTTP ${r.status}`)
+    throw new Error(detail)
   }
-  img.src = src
+  const href = URL.createObjectURL(await r.blob())
+  Object.assign(document.createElement('a'), { href, download: name }).click()
+  setTimeout(() => URL.revokeObjectURL(href), 1000)
 }

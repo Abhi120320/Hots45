@@ -88,6 +88,13 @@ def test_download_csv():
     assert s[0].startswith("month,hotspots") and len(s) == 73
 
 
+def test_download_too_large_gives_a_reason(monkeypatch):
+    import backend.main as m
+    monkeypatch.setattr(m, "MAX_DOWNLOAD_ROWS", 0)
+    r = c.get("/api/download", params={"bbox": BBOX})
+    assert r.status_code == 413 and "smaller area" in r.json()["detail"]
+
+
 def test_validation_400():
     assert c.get("/api/map", params={"start": "2020-13"}).status_code == 400
     assert c.get("/api/series", params={"bbox": "1,2,3"}).status_code == 400

@@ -145,7 +145,8 @@ export default function Calendar({ rows, meta, onPickMonth, selected, large = fa
     show(ny, nm)
   }
 
-  const exportPng = () => svgRef.current && svgToPng(svgRef.current, large ? 3 : 2, 'hots45_calendar.png')
+  const [pngErr, setPngErr] = useState<string | null>(null)
+  const exportPng = () => { setPngErr(null); if (svgRef.current) svgToPng(svgRef.current, large ? 3 : 2, 'hots45_calendar.png').catch(e => setPngErr(`PNG download failed: ${e.message}`)) }
 
   // ---------- plain-language summary ----------
   const L = d.last
@@ -177,6 +178,7 @@ export default function Calendar({ rows, meta, onPickMonth, selected, large = fa
           {newestFirst ? 'Newest first' : 'Oldest first'} ⇅
         </button>
         <button className="ml-auto text-[11px] text-dim hover:text-ink underline underline-offset-2" onClick={exportPng} aria-label="Download calendar as PNG">PNG</button>
+        {pngErr && <span role="alert" className="text-[11px] text-accent">{pngErr}</span>}
       </div>
 
       <div className="relative">

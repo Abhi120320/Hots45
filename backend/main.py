@@ -68,6 +68,8 @@ MONTHS = list(all_months(META["first_month"], META["last_month"]))
 LAST_COMPLETE = META.get("last_complete_month", META["last_month"])
 GAP_MONTHS = META.get("gap_months", [])
 NOTES = META.get("month_notes", {})
+# ~60k rows keeps the CSV under the ~4.5 MB serverless response cap
+MAX_DOWNLOAD_ROWS = int(os.environ.get("MAX_DOWNLOAD_ROWS", 60_000 if DATA_URL else 2_000_000))
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 db = duckdb.connect()
@@ -343,6 +345,13 @@ def download(bbox: str = None, start: str = None, end: str = None, region: str =
         w, p = where(tuple(poly.bounds), s, e)
     else:
         w, p = where(parse_bbox(bbox), s, e, reg)
+    # Refuse oversized exports up front (cheap count from the cell table): a whole-record CSV is ~46 M rows, which
+    # fills /tmp and, on serverless, exceeds the response size limit, so the browser just shows a cancelled download.
+    cw, cp = where(None if reg else parse_bbox(bbox), s, e, reg)
+    n = int(db.execute(f"SELECT coalesce(sum(modis + viirs), 0) FROM read_parquet('{CELLS}') WHERE {cw}", cp).fetchall()[0][0])
+    if n > MAX_DOWNLOAD_ROWS:
+        raise HTTPException(413, f"This selection has about {n:,} hotspots; the download limit is {MAX_DOWNLOAD_ROWS:,}. "
+                                 "Pick a smaller area or a shorter period.")
     if POINTS_PARTITIONED:  # lets DuckDB skip whole year folders
         w, p = f"{w} AND year BETWEEN ? AND ?", p + [int(s[:4]), int(e[:4])]
     cur = db.cursor()

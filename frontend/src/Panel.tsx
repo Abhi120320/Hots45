@@ -1,8 +1,8 @@
-import React, { memo, useEffect, useMemo, type ReactNode } from 'react'
+import React, { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import ReactECharts from 'echarts-for-react'
 import AreaControls from './Area'
 import Calendar from './Calendar'
-import { lineOption } from './charts'
+import { downloadUrl, lineOption } from './charts'
 import BeforeAfter from './BeforeAfter'
 import type { ChartKey } from './url'
 import { areaParams, regionLabel, url, useApi, type Area, type BBox, type Meta, type Region, type SeriesRow, type Summary, type TopArea } from './api'
@@ -78,8 +78,7 @@ export default memo(function Panel(p: Props) {
 
       <Card title="Download" sub={`CSV, UTC dates${p.area && 'region' in p.area ? ' · hotspots inside the exact outline' : ''}`}>
         <div className="flex flex-wrap gap-2">
-          <a className="h-7 px-2.5 inline-flex items-center border border-line rounded-sm bg-raised hover:border-dim text-[12px]"
-            href={url('/api/download', { ...ap, start: p.start, end: p.end })} download>Hotspots CSV</a>
+          <HotspotsCsv href={url('/api/download', { ...ap, start: p.start, end: p.end })} name={`hots45_hotspots_${p.start}_${p.end}.csv`} />
           <a className="h-7 px-2.5 inline-flex items-center border border-line rounded-sm bg-raised hover:border-dim text-[12px]"
             href={url('/api/download/series', ap)} download>Monthly series CSV</a>
         </div>
@@ -87,6 +86,24 @@ export default memo(function Panel(p: Props) {
     </div>
   )
 })
+
+function HotspotsCsv({ href, name }: { href: string; name: string }) {
+  const [st, setSt] = useState<{ busy?: boolean; err?: string }>({})
+  useEffect(() => setSt({}), [href]) // a new selection clears the old message
+  const go = () => {
+    setSt({ busy: true })
+    downloadUrl(href, name).then(() => setSt({}), e => setSt({ err: e.message }))
+  }
+  return (
+    <>
+      <button onClick={go} disabled={st.busy} aria-busy={st.busy}
+        className="h-7 px-2.5 inline-flex items-center border border-line rounded-sm bg-raised hover:border-dim text-[12px] disabled:opacity-60">
+        {st.busy ? 'Preparing CSV…' : 'Hotspots CSV'}
+      </button>
+      {st.err && <p role="alert" className="basis-full text-[12px] text-accent">Download failed: {st.err}</p>}
+    </>
+  )
+}
 
 function TopAreas({ start, end, view, periodLabel, area, setArea }: {
   start: string; end: string; view?: BBox; periodLabel: string; area: Area; setArea: (a: Area) => void

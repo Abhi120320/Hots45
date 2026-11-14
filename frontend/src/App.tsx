@@ -73,8 +73,8 @@ function Main({ meta }: { meta: Meta }) {
     const snap = (v: number, f: (x: number) => number, lo: number, hi: number) => Math.min(hi, Math.max(lo, f(v / step) * step))
     return [snap(w, Math.floor, -180, 180), snap(s, Math.floor, -90, 90), snap(e, Math.ceil, -180, 180), snap(n, Math.ceil, -90, 90)]
   }, [longitude, latitude, zoom, pitch, bearing, grid, panelOpen, panelW])
-  const cells = useApi<Cell[]>(url('/api/map', { start: mStart, end: mEnd, grid, bbox: view }), 150)
-  const anomaly = useApi<AnomalyCell[]>(mapMode === 'anomaly' ? url('/api/anomaly', { start: mStart, end: mEnd, grid, bbox: view }) : null, 150)
+  const cells = useApi<Cell[]>(url('/api/map', { start: mStart, end: mEnd, grid, bbox: view }), 150, true)
+  const anomaly = useApi<AnomalyCell[]>(mapMode === 'anomaly' ? url('/api/anomaly', { start: mStart, end: mEnd, grid, bbox: view }) : null, 150, true)
   const scale = useApi<{ q: Record<string, number> }>(url('/api/scale', { grid }))
   const active = mapMode === 'anomaly' ? anomaly : cells
 

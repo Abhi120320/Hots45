@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import DeckGL from '@deck.gl/react'
 import { _GlobeView as GlobeView, MapView, LinearInterpolator, type PickingInfo } from '@deck.gl/core'
 import { TileLayer } from '@deck.gl/geo-layers'
@@ -75,12 +75,13 @@ export default function Earth(p: Props) {
   const [hover, setHover] = useState<[number, number] | null>(null)
   const [draft, setDraft] = useState<[number, number, number, number] | null>(null)
   const tileErrors = useRef(0)
+  const [glError, setGlError] = useState<string | null>(() => (hasWebGL() ? null : 'This browser has WebGL turned off or unavailable.'))
   const [hoverObj, setHoverObj] = useState<{ o: Cell | AnomalyCell; x: number; y: number } | null>(null)
 
   // Admin boundaries (map view only): states from the 3D map's first zoom, districts from zoom 6
   const zInt = Math.floor(p.viewState.zoom)
-  const adm1 = useApi<Boundaries>(isMap && p.view ? url('/api/boundaries', { level: 1, bbox: p.view, zoom: zInt }) : null, 200)
-  const adm2 = useApi<Boundaries>(isMap && p.view && zInt >= 6 ? url('/api/boundaries', { level: 2, bbox: p.view, zoom: zInt }) : null, 200)
+  const adm1 = useApi<Boundaries>(isMap && p.view ? url('/api/boundaries', { level: 1, bbox: p.view, zoom: zInt }) : null, 200, true)
+  const adm2 = useApi<Boundaries>(isMap && p.view && zInt >= 6 ? url('/api/boundaries', { level: 2, bbox: p.view, zoom: zInt }) : null, 200, true)
 
   // hover details (names + % vs normal) for the cell under the pointer, debounced and cached by useApi
   const [hoverKey, setHoverKey] = useState<string | null>(null)
@@ -230,11 +231,26 @@ export default function Earth(p: Props) {
       : new GlobeView({ id: 'globe', resolution: 10, controller: { dragPan: !p.drawing, keyboard: true, ...motion } as any })
   }, [isMap, p.drawing])
 
+  if (glError) return (
+    <div className="absolute inset-0">
+      <Flat2D cells={shownCells} anomaly={p.mode === 'anomaly' ? p.anomaly : undefined} color={v => rgb(YLORRD6[cls.colorIdx(cls.classOf(v))])}
+        val={(c: Cell) => c.hotspots / per} area={p.area} />
+      <div role="alert" className="absolute right-4 top-28 max-w-[340px] bg-panel border border-accent/50 rounded-md px-3 py-2 text-[12px] text-ink">
+        <b>The 3D map could not start.</b> {glError} Showing a simple 2D view of the same hotspots instead: no basemap, zoom or
+        Draw box. Search for an area in the panel; charts and downloads work as normal. To get the 3D map, enable hardware
+        acceleration in your browser settings or try another browser.
+      </div>
+      <Legend {...p} isMap={false} cls={cls} />
+    </div>
+  )
+
   return (
     <div className="absolute inset-0" style={{ cursor: p.drawing ? 'crosshair' : undefined }}
       onPointerDown={p.onInteract} onWheel={p.onInteract}
       role="application" aria-label="3D map of fire hotspots. Use arrow keys to pan, plus and minus to zoom.">
+      <GLBoundary onError={m => setGlError(m)}>
       <DeckGL
+        onError={(e: Error) => setGlError(`The graphics context failed (${e.message}).`)}
         views={view}
         viewState={p.viewState as any}
         onViewStateChange={({ viewState: raw, interactionState }: any) => {
@@ -272,6 +288,7 @@ export default function Earth(p: Props) {
           </MapLibre>
         )}
       </DeckGL>
+      </GLBoundary>
 
       <Legend {...p} isMap={isMap} cls={cls} />
       {hoverObj && <Tooltip o={hoverObj.o} x={hoverObj.x} y={hoverObj.y} info={cellInfo.data} loading={cellInfo.loading} grid={p.grid} periodLabel={p.periodLabel} />}
@@ -282,6 +299,59 @@ export default function Earth(p: Props) {
       </div>
     </div>
   )
+}
+
+function hasWebGL() {
+  try {
+    const c = document.createElement('canvas')
+    return !!(c.getContext('webgl2') || c.getContext('webgl'))
+  } catch { return false }
+}
+
+/** Catches a render-time crash inside deck.gl/MapLibre so the rest of the app keeps working. */
+class GLBoundary extends Component<{ onError: (m: string) => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() { return { failed: true } }
+  componentDidCatch(e: Error) { this.props.onError(`The map crashed (${e.message}).`) }
+  render() { return this.state.failed ? null : this.props.children }
+}
+
+/** No-WebGL fallback: hotspot cells on a plain 2D canvas (equirectangular, fitted to the data). */
+function Flat2D({ cells, anomaly, color, val, area }: {
+  cells: Cell[]; anomaly?: AnomalyCell[]; color: (v: number) => [number, number, number]; val: (c: Cell) => number; area: Area
+}) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  const [size, setSize] = useState({ w: 0, h: 0 })
+  useEffect(() => {
+    const el = ref.current?.parentElement
+    if (!el) return
+    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  useEffect(() => {
+    const cv = ref.current, ctx = cv?.getContext('2d')
+    const pts: { lon: number; lat: number }[] = anomaly ?? cells
+    if (!cv || !ctx || !size.w) return
+    const dpr = window.devicePixelRatio || 1
+    cv.width = size.w * dpr; cv.height = size.h * dpr
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, size.w, size.h)
+    if (!pts.length) return
+    let [x0, y0, x1, y1] = [180, 90, -180, -90]
+    for (const c of pts) { x0 = Math.min(x0, c.lon); x1 = Math.max(x1, c.lon); y0 = Math.min(y0, c.lat); y1 = Math.max(y1, c.lat) }
+    const pad = 40, k = Math.min((size.w - 2 * pad) / Math.max(1, x1 - x0), (size.h - 2 * pad) / Math.max(1, y1 - y0))
+    const X = (lon: number) => pad + (lon - x0) * k, Y = (lat: number) => size.h - pad - (lat - y0) * k
+    const r = Math.max(1.5, k * 0.05)
+    for (const c of pts) {
+      const [R, G, B] = anomaly ? divergingColor(ratioT((c as AnomalyCell).current, (c as AnomalyCell).baseline)) : color(val(c as Cell))
+      ctx.fillStyle = `rgb(${R},${G},${B})`
+      ctx.fillRect(X(c.lon) - r / 2, Y(c.lat) - r / 2, r, r)
+    }
+    const b = area ? ('region' in area ? area.region.bbox : area.bbox) : null
+    if (b) { ctx.strokeStyle = '#E8743B'; ctx.lineWidth = 1.5; ctx.strokeRect(X(b[0]), Y(b[3]), (b[2] - b[0]) * k, (b[3] - b[1]) * k) }
+  }, [cells, anomaly, color, val, area, size])
+  return <canvas ref={ref} className="absolute inset-0 w-full h-full" role="img" aria-label="2D map of hotspot cells (3D map unavailable)" />
 }
 
 function Legend(p: Props & { isMap: boolean; cls: ReturnType<typeof classify> }) {

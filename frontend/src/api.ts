@@ -92,22 +92,24 @@ export function prefetch(u: string) { get(u).catch(() => {}) }
 
 export interface Loadable<T> { data?: T; error?: string; loading: boolean }
 
-/** Fetch u (debounced, cached). Keeps the previous data while the next request loads. */
-export function useApi<T>(u: string | null, debounceMs = 0): Loadable<T> {
-  const [state, set] = useState<Loadable<T>>({ loading: !!u })
+/** Fetch u (debounced, cached). Data is only returned for the current u, so a panel never shows the previous
+ *  area's numbers under a new name; map layers pass keepStale to keep drawing the old view while panning. */
+export function useApi<T>(u: string | null, debounceMs = 0, keepStale = false): Loadable<T> {
+  const [state, set] = useState<Loadable<T> & { for?: string }>({ loading: !!u })
   useEffect(() => {
     if (!u) return
     let live = true
-    set(s => ({ data: s.data, loading: true }))
+    set(s => ({ data: s.data, for: s.for, loading: true }))
     const t = setTimeout(() => {
       get<T>(u).then(
-        data => live && set({ data, loading: false }),
-        e => live && set(s => ({ data: s.data, error: String(e.message ?? e), loading: false })),
+        data => live && set({ data, for: u, loading: false }),
+        e => live && set(s => ({ data: s.data, for: s.for, error: String(e.message ?? e), loading: false })),
       )
     }, cache.has(u) ? 0 : debounceMs)
     return () => { live = false; clearTimeout(t) }
   }, [u, debounceMs])
-  return state
+  if (keepStale || state.for === u) return state
+  return { loading: !!u && !state.error, error: state.error }
 }
 
 /** An admin unit (country / state / district) or a radius around a place, as returned by /api/search and /api/region */

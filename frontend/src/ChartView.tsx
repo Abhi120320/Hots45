@@ -61,10 +61,13 @@ export default function ChartView(p: Props) {
   const period = start === end ? monthLabel(start) : `${monthLabel(start)} – ${monthLabel(end)}`
   const base = `hots45_${p.chart}_${(ap.region ?? (ap.bbox ? 'box' : 'all')).replace(/[^\w.-]/g, '_')}`
 
+  const [dlErr, setDlErr] = useState<string | null>(null)
   const downloadPng = () => {
-    if (p.chart === 'calendar') { if (svg.current) svgToPng(svg.current, 3, `${base}.png`); return }
+    setDlErr(null)
+    if (p.chart === 'calendar') { if (svg.current) svgToPng(svg.current, 3, `${base}.png`).catch(e => setDlErr(`PNG download failed: ${e.message}`)); return }
     const u = ec.current?.getDataURL({ type: 'png', pixelRatio: 3, backgroundColor: '#0B0D10' })
     if (u) Object.assign(document.createElement('a'), { href: u, download: `${base}.png` }).click()
+    else setDlErr('PNG download failed: the chart is not ready yet.')
   }
   const downloadData = () => {
     if (!rows) return
@@ -92,6 +95,7 @@ export default function ChartView(p: Props) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {dlErr && <span role="alert" className="self-center text-[12px] text-accent">{dlErr}</span>}
           <button className={btn} onClick={downloadPng}>Download PNG</button>
           <button className={btn} onClick={downloadData} disabled={!rows}>Download data</button>
           <button className={btn} onClick={copy} aria-live="polite">{copied ? 'Link copied' : 'Copy link'}</button>

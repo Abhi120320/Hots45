@@ -199,13 +199,29 @@ export default function AreaControls(p: Props) {
   )
 }
 
+const COORD_NAMES = ['West longitude', 'South latitude', 'East longitude', 'North latitude']
+
+/** Why a [west, south, east, north] entry can't be applied, or null when it can. */
+export function bboxError(v: string[]): string | null {
+  const blank = v.findIndex(x => x.trim() === '')
+  if (blank >= 0) return `Enter the ${COORD_NAMES[blank].toLowerCase()}.`
+  const bad = v.findIndex(x => Number.isNaN(+x))
+  if (bad >= 0) return `${COORD_NAMES[bad]} must be a number, e.g. 75.5 or -12.`
+  const [w, s, e, n] = v.map(Number)
+  if (w < -180 || w > 180 || e < -180 || e > 180) return 'Longitudes must be between -180 and 180.'
+  if (s < -90 || s > 90 || n < -90 || n > 90) return 'Latitudes must be between -90 and 90.'
+  if (w >= e) return 'West longitude must be less than east longitude.'
+  if (s >= n) return 'South latitude must be less than north latitude.'
+  return null
+}
+
 function Coordinates({ area, setArea }: { area: Area; setArea: (a: Area) => void }) {
   const box = area && 'bbox' in area ? area.bbox : area && 'region' in area ? area.region.bbox : undefined
   const [v, setV] = useState<string[]>(['', '', '', ''])
   useEffect(() => setV(box ? box.map(x => String(+x.toFixed(3))) : ['', '', '', '']), [box?.join()])
   const nums = v.map(Number)
-  const valid = v.every(s => s.trim() !== '' && !Number.isNaN(+s)) && nums[0] < nums[2] && nums[1] < nums[3]
-    && nums[0] >= -180 && nums[2] <= 180 && nums[1] >= -90 && nums[3] <= 90
+  const error = bboxError(v)
+  const valid = error === null
   return (
     <details className="text-[11px] text-dim">
       <summary className="cursor-pointer select-none hover:text-ink">Enter coordinates</summary>
@@ -215,11 +231,14 @@ function Coordinates({ area, setArea }: { area: Area; setArea: (a: Area) => void
           <label key={l} className="text-[10px] text-faint">
             {l}
             <input className="num mt-0.5 w-full h-7 px-1.5 bg-bg border border-line rounded-sm text-[12px] text-ink"
-              inputMode="decimal" value={v[i]} onChange={e => setV(v.map((x, j) => (j === i ? e.target.value : x)))} />
+              inputMode="decimal" aria-describedby="coord-error" aria-invalid={!!error && v.some(x => x.trim())} value={v[i]} onChange={e => setV(v.map((x, j) => (j === i ? e.target.value : x)))} />
           </label>
         ))}
-        <button type="submit" disabled={!valid}
+        <button type="submit" disabled={!valid} aria-describedby="coord-error"
           className="h-7 px-2.5 text-[12px] border border-line rounded-sm bg-raised hover:border-dim disabled:opacity-40">Apply</button>
+        <p id="coord-error" role="status" className="col-span-5 text-[11px] text-accent min-h-[1em]">
+          {error && v.some(x => x.trim()) ? error : ''}
+        </p>
       </form>
     </details>
   )
