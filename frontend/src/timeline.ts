@@ -82,3 +82,9 @@ export function peakIndex(values: number[] | undefined, a: number, b: number) {
   for (let i = a; i <= b; i++) if ((values[i] ?? 0) > (values[best] ?? 0)) best = i
   return best
 }
+
+/** Selection band in pixels, clipped to the plot area [gl, gr]. Clipped sides get no handle but a "continues" marker. */
+export function clipBand(x0: number, x1: number, gl: number, gr: number) {
+  const left = Math.min(Math.max(x0, gl), gr), right = Math.max(Math.min(x1, gr), gl)
+  return { left, width: Math.max(0, right - left), clipL: x0 < gl, clipR: x1 > gr, visible: x1 > gl && x0 < gr }
+}

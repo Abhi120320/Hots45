@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { initTL, peakIndex, reduceTL, type TL, type TLAction } from './timeline'
+import { clipBand, initTL, peakIndex, reduceTL, type TL, type TLAction } from './timeline'
 
 // 2003-01 .. 2026-10 = 286 months; latest complete = 2026-10 (index 285)
 const ctx = { n: 286, lastComplete: 285 }
@@ -68,5 +68,15 @@ describe('timeline state', () => {
     expect(peakIndex([1, 9, 3, 7], 0, 3)).toBe(1)
     expect(peakIndex([1, 9, 3, 7], 2, 3)).toBe(3)
     expect(peakIndex(undefined, 2, 3)).toBe(3)
+  })
+})
+
+describe('selection band clipping', () => {
+  it('keeps the band inside the plot and flags clipped sides', () => {
+    expect(clipBand(100, 300, 52, 900)).toEqual({ left: 100, width: 200, clipL: false, clipR: false, visible: true })
+    // selection starts before the visible window (e.g. Dec 2009 while zoomed to 2014+): clipped left, no misplaced handle
+    expect(clipBand(-400, 300, 52, 900)).toMatchObject({ left: 52, width: 248, clipL: true, clipR: false })
+    expect(clipBand(500, 2000, 52, 900)).toMatchObject({ left: 500, width: 400, clipL: false, clipR: true })
+    expect(clipBand(-50, -10, 52, 900).visible).toBe(false)
   })
 })

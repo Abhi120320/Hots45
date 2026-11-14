@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react'
 import { url, useApi, type BBox, type Meta, type SeriesRow } from './api'
 import { fmt, monthLabel } from './colors'
 import { abbr } from './Calendar'
-import { peakIndex, type TL, type TLAction } from './timeline'
+import { clipBand, peakIndex, type TL, type TLAction } from './timeline'
 
 interface DailyRow { date: string; hotspots: number; median: number; pct_vs_median: number | null; note: string }
 interface Season { text: string; data_through?: string }
@@ -58,7 +58,7 @@ export default memo(function TimelineChart(p: Props) {
   const chartRef = useRef<ReactECharts>(null)
   const [expanded, setExpanded] = useState(false)
   const [win, setWin] = useState<[number, number]>([ms(months[0]), monthEnd(months[n - 1])])
-  const [px, setPx] = useState<{ x0: number; x1: number; top: number; h: number } | null>(null)
+  const [px, setPx] = useState<(ReturnType<typeof clipBand> & { top: number; h: number }) | null>(null)
   const [drag, setDrag] = useState<{ kind: 'move' | 'a' | 'b'; x: number; a: number; b: number } | null>(null)
   const [hint, setHint] = useState(() => { try { return !localStorage.getItem(HINT_KEY) } catch { return true } })
   const [labels, setLabels] = useState<Record<string, string>>(() => { try { return JSON.parse(localStorage.getItem(EVENTS_KEY) ?? '{}') } catch { return {} } })
@@ -206,9 +206,9 @@ export default memo(function TimelineChart(p: Props) {
     if (!c) return
     const x0 = c.convertToPixel({ xAxisIndex: 0 }, ms(months[tl.a])) as number
     const x1 = c.convertToPixel({ xAxisIndex: 0 }, monthEnd(months[tl.b])) as number
-    const h = c.getHeight()
-    setPx({ x0, x1, top: 26, h: h - 26 - 46 })
-  }, [months, tl.a, tl.b])
+    const h = c.getHeight(), gl = p.large ? 72 : 52, gr = c.getWidth() - 16
+    setPx({ ...clipBand(x0, x1, gl, gr), top: 26, h: h - 26 - 46 })
+  }, [months, tl.a, tl.b, p.large])
   useEffect(() => { const id = requestAnimationFrame(place); return () => cancelAnimationFrame(id) }, [place, option, expanded])
 
   const monthAt = (x: number) => {
@@ -251,6 +251,7 @@ export default memo(function TimelineChart(p: Props) {
   // ---------- chart events: zoom, hover preview, click to jump, rename events ----------
   const previewT = useRef<number>(0)
   const onEvents = useMemo(() => ({
+    finished: () => place(),
     datazoom: () => {
       const c = chartRef.current?.getEchartsInstance()
       const dz = (c?.getOption() as any)?.dataZoom?.[0]
@@ -272,7 +273,7 @@ export default memo(function TimelineChart(p: Props) {
         setEditing({ id, value: labels[id] ?? '', x: e.event?.offsetX ?? 80, y: e.event?.offsetY ?? 30 })
       }
     },
-  }), [months, p, labels, drag])
+  }), [months, p, labels, drag, place])
   useEffect(() => {
     const c = chartRef.current?.getEchartsInstance()
     if (!c) return
@@ -442,14 +443,16 @@ export default memo(function TimelineChart(p: Props) {
             <button className="h-6 px-1.5 text-[11px] text-dim hover:text-ink" aria-label="Cancel" onClick={() => setEditing(null)}>✕</button>
           </div>
         )}
-        {px && px.x1 > 0 && (
+        {px && px.visible && (
           <div className="absolute pointer-events-none" style={{ left: 0, right: 0, top: px.top, height: px.h }}>
             <div role="slider" tabIndex={0} aria-label={tl.mode === 'month' ? 'Selected month' : 'Selected range'}
               aria-valuetext={label} aria-valuemin={0} aria-valuemax={n - 1} aria-valuenow={tl.a}
               onPointerDown={onDown('move')} onKeyDown={keyOn('move')}
               className="absolute top-0 bottom-0 pointer-events-auto cursor-grab active:cursor-grabbing border-x-2 border-accent focus:outline-accent"
-              style={{ left: Math.max(0, px.x0), width: Math.max(3, px.x1 - px.x0) }}>
-              {tl.mode === 'range' && (['a', 'b'] as const).map(h => (
+              style={{ left: px.left, width: Math.max(3, px.width), borderLeftColor: px.clipL ? 'transparent' : undefined, borderRightColor: px.clipR ? 'transparent' : undefined }}>
+              {px.clipL && <span className="absolute left-1 top-1 text-[10px] text-accent whitespace-nowrap">◀ continues</span>}
+              {px.clipR && <span className="absolute right-1 top-1 text-[10px] text-accent whitespace-nowrap">continues ▶</span>}
+              {tl.mode === 'range' && (['a', 'b'] as const).filter(h => !(h === 'a' ? px.clipL : px.clipR)).map(h => (
                 <div key={h} role="slider" tabIndex={0} aria-label={h === 'a' ? 'Range start' : 'Range end'}
                   aria-valuetext={monthLabel(months[h === 'a' ? tl.a : tl.b])} aria-valuemin={0} aria-valuemax={n - 1} aria-valuenow={h === 'a' ? tl.a : tl.b}
                   onPointerDown={onDown(h)} onKeyDown={keyOn(h)}
