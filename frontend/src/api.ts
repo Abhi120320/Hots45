@@ -25,9 +25,13 @@ export interface Meta {
   gap_months?: string[]
   provisional_months?: string[]
   month_notes?: Record<string, string>
+  coverage_bbox?: BBox
+  has_boundaries?: boolean
 }
 
 export interface Cell { lon: number; lat: number; hotspots: number; modis: number; viirs: number }
+
+export interface AnomalyCell { lon: number; lat: number; current: number; baseline: number; diff: number; z: number }
 
 export interface SeriesRow {
   month: string
@@ -105,3 +109,48 @@ export function useApi<T>(u: string | null, debounceMs = 0): Loadable<T> {
   }, [u, debounceMs])
   return state
 }
+
+/** An admin unit (country / state / district) or a radius around a place, as returned by /api/search and /api/region */
+export interface Region {
+  id: string // 'a<id>' admin unit, 'c<lon>,<lat>,<km>' radius
+  name: string
+  kind: string // Country, State, Province, District, Regency, Radius…
+  level: number // 0 country, 1 state, 2 district, 3 radius
+  parent: string // "Punjab, India"
+  bbox: BBox
+  label: [number, number]
+  rings?: [number, number][][]
+  in_coverage?: boolean
+}
+
+export interface Place {
+  name: string
+  type: string
+  lon: number
+  lat: number
+  state?: string | null
+  country?: string | null
+  in_coverage: boolean
+  district_id?: string | null
+  state_id?: string | null
+  country_id?: string | null
+  district?: string | null
+}
+
+export interface Boundaries { lines: [number, number][][]; labels: { id: string; name: string; pos: [number, number]; area: number }[] }
+
+export interface CellInfo {
+  lon: number; lat: number
+  country?: string | null; state?: string | null; district?: string | null
+  current: number | null; median: number | null; pct_vs_median: number | null
+}
+
+export interface TopArea extends Region { hotspots: number; share: number }
+
+/** Region label shown in chips and headers: "Punjab, India" */
+export const regionLabel = (r: Pick<Region, 'name' | 'parent'>) => [r.name, r.parent].filter(Boolean).join(', ')
+
+/** Area for analytics: an admin/radius region, or a rectangle */
+export type Area = { region: Region } | { bbox: BBox } | null
+export const areaParams = (a: Area): { region?: string; bbox?: BBox } =>
+  !a ? {} : 'region' in a ? { region: a.region.id } : { bbox: a.bbox }

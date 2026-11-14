@@ -27,4 +27,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --target app -t fireledger .
+      - run: docker build --target app -t hots45 .

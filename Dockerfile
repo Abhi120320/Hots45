@@ -21,7 +21,7 @@ FROM python:3.12-slim AS app
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
-COPY backend/main.py backend/__init__.py backend/
+COPY backend/__init__.py backend/main.py backend/admin.py backend/alerts.py backend/
 COPY data_prep/fire_harmonize.py data_prep/
 COPY --from=web /app/frontend/dist frontend/dist
 ENV APP_DATA=/app/backend/app_data PORT=8000

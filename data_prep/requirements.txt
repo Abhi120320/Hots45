@@ -4,3 +4,4 @@ pyarrow==26.0.1
 matplotlib
 pytest
 httpx
+shapely==2.2.0

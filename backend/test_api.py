@@ -25,6 +25,17 @@ pd.DataFrame({"lat": [30.01, 20.02], "lon": [75.01, 80.02],
                                            "factor_by_tile": {"70,30": {"k": {"01": 5.0}, "n": {"01": 3}}},
                                            "gap_months": ["2005-01"],
                                            "month_notes": {"2005-01": "VIIRS data gap (3–6 Jan)", "2006-12": "provisional (NRT data)"}}))
+import shapely  # noqa: E402
+
+# tiny boundary set: India (country) > Punjab (state) > Ludhiana (district) around the 75.025, 30.025 cell
+_units = [(0, "India", "Country", None, (68, 6, 97, 36)), (1, "Punjab", "State", None, (73.8, 29.5, 77, 32.6)),
+          (2, "Ludhiana", "District", "Punjab", (74.9, 29.9, 75.2, 30.2))]
+pd.DataFrame([{"id": i, "level": lvl, "name": n, "kind": k, "adm1": a, "country": "India", "iso": "IND",
+               "geometry": shapely.to_wkb(shapely.box(*b)), "lx": (b[0] + b[2]) / 2, "ly": (b[1] + b[3]) / 2,
+               "minx": b[0], "miny": b[1], "maxx": b[2], "maxy": b[3]} for i, (lvl, n, k, a, b) in enumerate(_units)]
+             ).to_parquet(tmp / "admin.parquet", index=False)
+pd.DataFrame({"lat": [30.025, 20.025, 20.075], "lon": [75.025, 80.025, 80.075],
+              "adm0_id": [0, 0, 0], "adm1_id": [1, -1, -1], "adm2_id": [2, -1, -1]}).to_parquet(tmp / "cell_admin.parquet", index=False)
 os.environ["APP_DATA"] = str(tmp)
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -97,3 +108,72 @@ def test_gap_month_not_flagged_and_notes():
     assert s["2005-01"]["note"] == "VIIRS data gap (3–6 Jan)" and s["2005-01"]["flag"] == ""
     assert s["2006-12"]["note"] == "provisional (NRT data)" and s["2006-01"]["note"] == ""
     assert s["2006-01"]["flag"] == "unusually high"  # non-gap months still flagged
+
+
+def test_anomaly_vs_same_window_other_years():
+    r = c.get("/api/anomaly", params={"start": "2006-01", "end": "2006-01", "grid": 0.05, "bbox": BBOX}).json()
+    assert len(r) == 1 and r[0]["current"] == 100 and r[0]["baseline"] == 10 and r[0]["diff"] == 90 and r[0]["z"] > 2
+    # a normal year is not returned (diff 0)
+    assert c.get("/api/anomaly", params={"start": "2003-01", "end": "2003-01", "grid": 0.05, "bbox": BBOX}).json() == []
+    # years with no fire in the window count as 0 in the baseline: June 2003 is the only June with fire
+    r = c.get("/api/anomaly", params={"start": "2003-06", "end": "2003-06", "grid": 0.5}).json()
+    assert r == [{"lon": 80.25, "lat": 20.25, "current": 60.0, "baseline": 0.0, "diff": 60.0, "z": 40.47}]
+    assert c.get("/api/anomaly", params={"start": "2001-01", "end": "2002-06"}).status_code == 400
+
+
+def test_search_fuzzy_and_hierarchy():
+    r = c.get("/api/search", params={"q": "pun"}).json()
+    assert r[0]["name"] == "Punjab" and r[0]["kind"] == "State" and r[0]["parent"] == "India"
+    assert c.get("/api/search", params={"q": "ludhiyana"}).json()[0]["name"] == "Ludhiana"  # typo-tolerant
+    d = c.get("/api/search", params={"q": "ludhiana"}).json()[0]
+    assert d["parent"] == "Punjab, India" and d["id"] == "a2"
+
+
+def test_region_filters_series_and_summary():
+    by_box = c.get("/api/series", params={"bbox": BBOX}).json()
+    by_state = c.get("/api/series", params={"region": "a1"}).json()
+    assert [r["hotspots"] for r in by_state] == [r["hotspots"] for r in by_box]  # same single cell
+    country = c.get("/api/summary", params={"region": "a0"}).json()
+    assert country["total"] == 6 * 10 + 90 + 60  # all three cells are in India
+    circle = c.get("/api/summary", params={"region": "c75.0,30.0,10"}).json()
+    assert circle["total"] == 150  # 75.025, 30.025 is ~3.6 km away
+    assert c.get("/api/series", params={"region": "a99"}).status_code == 400
+
+
+def test_region_info_top_and_cell():
+    info = c.get("/api/region/a2").json()
+    assert info["parent"] == "Punjab, India" and info["in_coverage"] and len(info["rings"][0]) == 5
+    assert c.get("/api/region/c140,-40,25").json()["in_coverage"] is False
+    top = c.get("/api/top").json()
+    assert top[0]["name"] == "Ludhiana" and top[0]["share"] == 100.0  # the other cells have no district/state
+    cell = c.get("/api/cell", params={"lon": 75.025, "lat": 30.025, "grid": 0.05, "start": "2006-01", "end": "2006-01"}).json()
+    assert (cell["district"], cell["state"], cell["country"]) == ("Ludhiana", "Punjab", "India")
+    assert cell["current"] == 100 and cell["median"] == 10 and cell["pct_vs_median"] == 900
+
+
+def test_fixed_scale_quantiles():
+    r = c.get("/api/scale", params={"grid": 0.05}).json()
+    assert r["q"]["0"] == 10 and r["q"]["0.995"] <= 100 and list(r["q"])[-2:] == ["0.99", "0.995"]
+    coarse = c.get("/api/scale", params={"grid": 1}).json()["q"]  # 1-degree cells merge the two June cells
+    assert coarse["0.995"] > 50
+
+
+def test_daily_counts_harmonized_and_zero_filled():
+    d = c.get("/api/daily", params={"start": "2006-01-01", "end": "2006-01-10", "bbox": BBOX}).json()
+    assert len(d) == 10 and [x["hotspots"] for x in d if x["date"] == "2006-01-05"] == [1.0]  # VIIRS point counts 1
+    assert sum(x["hotspots"] for x in d) == 1.0
+    m = c.get("/api/daily", params={"start": "2003-06-01", "end": "2003-06-30"}).json()
+    assert sum(x["hotspots"] for x in m) == 2.0  # MODIS point before viirs_start x calendar-month k (2.0)
+    assert c.get("/api/daily", params={"start": "2003-01-01", "end": "2005-01-01"}).status_code == 400  # > 400 days
+    assert c.get("/api/daily", params={"start": "2006-01-01", "end": "2006-01-10", "region": "a2"}).json()[4]["hotspots"] == 1.0
+
+
+def test_season_text():
+    r = c.get("/api/season", params={"bbox": BBOX}).json()
+    assert r["text"].startswith("Fires usually start") and r["peak"] is not None
+    assert c.get("/api/season", params={"bbox": "0,0,1,1"}).json()["text"] == "No fires recorded in this area."
+
+
+def test_top_within_selected_region():
+    assert [x["name"] for x in c.get("/api/top", params={"region": "a1"}).json()] == ["Ludhiana"]
+    assert c.get("/api/top", params={"bbox": "79,19,81,21"}).json() == []  # cells there have no admin unit

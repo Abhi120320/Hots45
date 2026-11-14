@@ -320,7 +320,7 @@ def main(argv=None):
     out, charts = Path(a.out), Path(a.charts)
     out.mkdir(parents=True, exist_ok=True)
     charts.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="fireledger_"))
+    work = Path(tempfile.mkdtemp(prefix="hots45_"))
     con = duckdb.connect(str(work / "work.duckdb"))  # file-backed so large joins spill to disk
     con.execute(f"SET temp_directory='{work}'; SET preserve_insertion_order=false; SET memory_limit='4GB'")
     try:

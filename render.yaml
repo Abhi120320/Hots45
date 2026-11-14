@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: fireledger-api
+    name: hots45-api
     runtime: python
     plan: free
     buildCommand: pip install -r backend/requirements.txt

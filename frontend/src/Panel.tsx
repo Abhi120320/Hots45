@@ -1,97 +1,146 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import React, { memo, useEffect, useMemo, type ReactNode } from 'react'
 import ReactECharts from 'echarts-for-react'
-import { url, useApi, type BBox, type Meta, type SeriesRow, type Summary } from './api'
-import { ACCENT, BELOW, CIVIDIS, MONTHS, SERIES, fmt, monthLabel, reducedMotion } from './colors'
+import AreaControls from './Area'
+import Calendar from './Calendar'
+import { lineOption } from './charts'
+import BeforeAfter from './BeforeAfter'
+import type { ChartKey } from './url'
+import { areaParams, regionLabel, url, useApi, type Area, type BBox, type Meta, type Region, type SeriesRow, type Summary, type TopArea } from './api'
+import { ACCENT, BELOW, MONTHS, fmt, monthLabel } from './colors'
 
-export const PRESETS: { name: string; bbox: BBox }[] = [
-  { name: 'India', bbox: [68, 6.5, 97.5, 35.5] },
-  { name: 'Punjab–Haryana', bbox: [73.8, 28.4, 77.6, 32.6] },
-  { name: 'Central India', bbox: [74, 18, 84, 26] },
-]
-
-const AXIS = { axisLine: { lineStyle: { color: '#262B33' } }, axisTick: { show: false }, axisLabel: { color: '#9AA3AE', fontSize: 10, fontFamily: 'IBM Plex Mono' }, splitLine: { lineStyle: { color: '#1B1F26' } } }
-const TIP = { backgroundColor: '#14171C', borderColor: '#262B33', textStyle: { color: '#E6E8EB', fontSize: 11, fontFamily: 'IBM Plex Mono' }, extraCssText: 'border-radius:4px;box-shadow:none' }
-const BASE = { backgroundColor: 'transparent', animation: !reducedMotion(), animationDuration: 250, textStyle: { fontFamily: 'IBM Plex Sans', color: '#9AA3AE' } }
-const LEGEND = { top: 0, left: 0, itemWidth: 14, itemHeight: 2, icon: 'rect', textStyle: { color: '#9AA3AE', fontSize: 10 } }
-const STAR = 'path://M50 0 61 35 98 35 68 57 79 91 50 70 21 91 32 57 2 35 39 35Z'
-const pct = (v: number | null) => (v == null ? '—' : `${v > 0 ? '+' : ''}${fmt(v, 0)}%`)
 
 interface Props {
   meta: Meta
-  bbox?: BBox
-  setBBox: (b?: BBox) => void
+  area: Area
+  setArea: (a: Area) => void
   start: string
   end: string
   drawing: boolean
   setDrawing: (d: boolean) => void
   onSeries: (s?: SeriesRow[]) => void
+  view?: BBox
+  periodLabel: string
+  onPickMonth: (m: string) => void
+  expand: (c: ChartKey) => { href: string; onClick: (e: React.MouseEvent) => void }
 }
 
-export default function Panel(p: Props) {
-  const series = useApi<SeriesRow[]>(url('/api/series', { bbox: p.bbox }))
-  const summary = useApi<Summary>(url('/api/summary', { bbox: p.bbox, start: p.start, end: p.end }), 200)
+const intersects = (a: BBox, b: BBox) => !(a[2] < b[0] || a[0] > b[2] || a[3] < b[1] || a[1] > b[3])
+
+export default memo(function Panel(p: Props) {
+  const ap = areaParams(p.area)
+  const cov = p.meta.coverage_bbox
+  const box = p.area ? ('region' in p.area ? p.area.region.bbox : p.area.bbox) : undefined
+  const outside = !!(box && cov && !intersects(box, cov))
+  const series = useApi<SeriesRow[]>(outside ? null : url('/api/series', ap))
+  const summary = useApi<Summary>(outside ? null : url('/api/summary', { ...ap, start: p.start, end: p.end }), 200)
   const rows = series.data
   const firstYear = +p.meta.first_month.slice(0, 4), lastYear = +p.meta.last_month.slice(0, 4)
   const nYears = lastYear - firstYear + 1
   const { onSeries } = p
-  useEffect(() => onSeries(rows), [rows, onSeries])
+  useEffect(() => onSeries(outside ? undefined : rows), [rows, onSeries, outside])
 
-  const area = p.bbox ? `${p.bbox[1]}–${p.bbox[3]}°N, ${p.bbox[0]}–${p.bbox[2]}°E` : 'Full data extent'
+  const label = !p.area ? 'Full data extent'
+    : 'region' in p.area ? `${regionLabel(p.area.region)} · ${p.area.region.kind}`
+      : `${p.area.bbox[1]}–${p.area.bbox[3]}°N, ${p.area.bbox[0]}–${p.area.bbox[2]}°E`
   const empty = summary.data && summary.data.total === 0
 
   return (
     <div className="flex flex-col gap-3 p-3">
-      <AreaControls {...p} />
+      <Card title="Area">
+        <AreaControls meta={p.meta} area={p.area} setArea={p.setArea} drawing={p.drawing} setDrawing={p.setDrawing} />
+      </Card>
 
       <div className="text-[11px] text-dim -mb-1">
-        <span className="text-ink font-medium">{area}</span> · <span className="num">{monthLabel(p.start)} – {monthLabel(p.end)}</span>
+        <span className="text-ink font-medium">{label}</span> · <span className="num">{monthLabel(p.start)} – {monthLabel(p.end)}</span>
       </div>
 
-      <Status l={summary} what="summary" />
-      {summary.data && <Kpis s={summary.data} nYears={nYears} />}
-      {empty && (
-        <p className="border border-line rounded-md p-3 text-dim" role="status">
-          No hotspots recorded in this area between {monthLabel(p.start)} and {monthLabel(p.end)}. Try a larger box or a longer range.
+      {outside ? (
+        <p className="border border-accent/40 rounded-md p-3 text-[12px] text-ink" role="status">
+          This area is outside our data coverage ({p.meta.region ?? 'data area'}: {cov?.[0]}–{cov?.[2]}°E, {cov?.[1]}–{cov?.[3]}°N),
+          so there are no hotspots to show. Pick an area inside it.
         </p>
+      ) : (
+        <>
+          <Status l={summary} what="summary" />
+          {summary.data && <Kpis s={summary.data} rows={rows} />}
+          <TopAreas start={p.start} end={p.end} view={p.view} periodLabel={p.periodLabel} area={p.area} setArea={p.setArea} />
+          {empty && (
+            <p className="border border-line rounded-md p-3 text-dim" role="status">
+              No hotspots recorded in this area between {monthLabel(p.start)} and {monthLabel(p.end)}. Try a larger area or a longer range.
+            </p>
+          )}
+          <Status l={series} what="monthly series" />
+          {rows && <Charts rows={rows} meta={p.meta} onPickMonth={p.onPickMonth} selected={[p.start, p.end]} expand={p.expand} />}
+        </>
       )}
-
-      <Status l={series} what="monthly series" />
-      {rows && <Charts rows={rows} meta={p.meta} nYears={nYears} />}
 
       <MethodCard meta={p.meta} nYears={nYears} />
 
-      <Card title="Download" sub="CSV, UTC dates">
+      <Card title="Download" sub={`CSV, UTC dates${p.area && 'region' in p.area ? ' · hotspots inside the exact outline' : ''}`}>
         <div className="flex flex-wrap gap-2">
           <a className="h-7 px-2.5 inline-flex items-center border border-line rounded-sm bg-raised hover:border-dim text-[12px]"
-            href={url('/api/download', { bbox: p.bbox, start: p.start, end: p.end })} download>Hotspots CSV</a>
+            href={url('/api/download', { ...ap, start: p.start, end: p.end })} download>Hotspots CSV</a>
           <a className="h-7 px-2.5 inline-flex items-center border border-line rounded-sm bg-raised hover:border-dim text-[12px]"
-            href={url('/api/download/series', { bbox: p.bbox })} download>Monthly series CSV</a>
+            href={url('/api/download/series', ap)} download>Monthly series CSV</a>
         </div>
       </Card>
     </div>
   )
+})
+
+function TopAreas({ start, end, view, periodLabel, area, setArea }: {
+  start: string; end: string; view?: BBox; periodLabel: string; area: Area; setArea: (a: Area) => void
+}) {
+  // a selected area wins over the visible map area (a tilted view can reach far beyond it)
+  const sel = areaParams(area)
+  const scope = sel.region || sel.bbox ? sel : { bbox: view }
+  const top = useApi<TopArea[]>(url('/api/top', { start, end, ...scope }), 300)
+  const selectedId = area && 'region' in area ? area.region.id : null
+  const pick = async (t: TopArea) => {
+    const r = await fetch(url(`/api/region/${t.id}`, {})).then(x => x.json() as Promise<Region>)
+    setArea({ region: r })
+  }
+  return (
+    <Card title="Top 10 fire areas" sub={`Districts (or states) in ${area ? 'the selected area' : view ? 'the current map view' : 'the whole record'} · ${periodLabel}`}>
+      <Status l={top} what="top areas" />
+      {top.data && top.data.length === 0 && <p className="text-[12px] text-faint">No hotspots in view for this period.</p>}
+      <ol className="flex flex-col">
+        {(top.data ?? []).map((t, i) => (
+          <li key={t.id}>
+            <button onClick={() => pick(t)} aria-pressed={selectedId === t.id}
+              className={`w-full grid grid-cols-[18px_1fr_auto_40px] gap-2 items-center text-left px-1.5 py-1 rounded-sm text-[12px] ${selectedId === t.id ? 'bg-accent/15' : 'hover:bg-raised'}`}>
+              <span className="num text-faint">{i + 1}</span>
+              <span className="truncate"><span className="text-ink">{t.name}</span><span className="text-faint"> · {t.parent}</span></span>
+              <span className="num text-ink">{fmt(t.hotspots)}</span>
+              <span className="num text-[10px] text-faint text-right">{t.share.toFixed(1)}%</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+      {!!top.data?.length && <p className="text-[10px] text-faint mt-1">Hotspots (VIIRS-equivalent) and share of the view's total. Click to fly there and select its outline.</p>}
+    </Card>
+  )
 }
 
-function Charts({ rows, meta, nYears }: { rows: SeriesRow[]; meta: Meta; nYears: number }) {
-  const calRef = useRef<ReactECharts>(null)
+function Charts({ rows, meta, onPickMonth, selected, expand }: {
+  rows: SeriesRow[]; meta: Meta; onPickMonth: (m: string) => void; selected: [string, string]; expand: Props['expand']
+}) {
   const span = `${meta.first_month.slice(0, 4)}–${meta.last_month.slice(0, 4)}`
-  const cal = useCalendar(rows), line = useLine(rows), ba = useBeforeAfter(rows, meta)
+  const line = useMemo(() => lineOption(rows), [rows])
+  const ex = (c: ChartKey) => {
+    const l = expand(c)
+    return <a {...l} className="shrink-0 text-[11px] text-dim hover:text-ink underline underline-offset-2" aria-label="Expand chart to full screen">Expand ⤢</a>
+  }
   return (
     <>
-      <Card title="Burning calendar" sub={`Hotspots (VIIRS-equivalent) per month · ★ |z| > 2 vs ${span} · dashed = data gap or provisional`}
-        action={<button className="text-[11px] text-dim hover:text-ink underline underline-offset-2"
-          aria-label="Download calendar as PNG"
-          onClick={() => {
-            const u = calRef.current?.getEchartsInstance().getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#14171C' })
-            if (u) Object.assign(document.createElement('a'), { href: u, download: 'fireledger_calendar.png' }).click()
-          }}>PNG</button>}>
-        <ReactECharts ref={calRef} option={cal} style={{ height: 96 + nYears * 22 }} notMerge />
+      <Card title="Burning calendar" sub={`Monthly hotspots for the selected area, ${span}`} action={ex('calendar')} onTitle={expand('calendar').onClick}>
+        <Calendar rows={rows} meta={meta} onPickMonth={onPickMonth} selected={selected} />
       </Card>
-      <Card title="Monthly hotspots" sub={`Hotspots per month (VIIRS-equivalent) with ${span} median and mean ± 1σ by calendar month`}>
+      <Card title="Monthly hotspots" sub={`Hotspots per month (VIIRS-equivalent) with ${span} median and mean ± 1σ by calendar month`} action={ex('monthly')} onTitle={expand('monthly').onClick}>
         <ReactECharts option={line} style={{ height: 210 }} notMerge />
       </Card>
-      <Card title="Before vs after harmonization" sub="Hotspots per month: raw sensor counts vs the harmonized record (VIIRS-equivalent)">
-        <ReactECharts option={ba} style={{ height: 210 }} notMerge />
+      <Card title="Before vs after harmonization" sub="Hotspots per month: raw sensor counts vs the harmonized record (VIIRS-equivalent)" action={ex('before-after')} onTitle={expand('before-after').onClick}>
+        <BeforeAfter rows={rows} meta={meta} />
       </Card>
     </>
   )
@@ -103,12 +152,12 @@ function Status({ l, what }: { l: { loading: boolean; error?: string; data?: unk
   return null
 }
 
-function Card({ title, sub, action, children }: { title: string; sub?: string; action?: ReactNode; children: ReactNode }) {
+function Card({ title, sub, action, children, onTitle }: { title: string; sub?: string; action?: ReactNode; children: ReactNode; onTitle?: (e: React.MouseEvent) => void }) {
   return (
     <section className="bg-panel border border-line rounded-md p-3">
       <div className="flex items-start justify-between gap-2 mb-2">
         <div>
-          <h2 className="text-[12px] font-semibold text-ink">{title}</h2>
+          <h2 className={`text-[12px] font-semibold text-ink ${onTitle ? 'cursor-pointer hover:underline' : ''}`} onClick={onTitle}>{title}</h2>
           {sub && <p className="text-[11px] text-faint">{sub}</p>}
         </div>
         {action}
@@ -118,61 +167,45 @@ function Card({ title, sub, action, children }: { title: string; sub?: string; a
   )
 }
 
-function AreaControls(p: Props) {
-  const [v, setV] = useState<string[]>(['', '', '', ''])
-  useEffect(() => setV(p.bbox ? p.bbox.map(String) : ['', '', '', '']), [p.bbox])
-  const nums = v.map(Number)
-  const valid = v.every(s => s.trim() !== '' && !Number.isNaN(+s)) && nums[0] < nums[2] && nums[1] < nums[3]
-    && nums[0] >= -180 && nums[2] <= 180 && nums[1] >= -90 && nums[3] <= 90
-  const chip = (on: boolean) => `h-7 px-2.5 text-[12px] border rounded-sm ${on ? 'border-accent text-ink bg-accent/15' : 'border-line bg-raised text-dim hover:text-ink hover:border-dim'}`
-  return (
-    <Card title="Area">
-      <div className="flex flex-wrap gap-1.5 mb-2">
-        {PRESETS.map(pr => (
-          <button key={pr.name} className={chip(p.bbox?.join() === pr.bbox.join())} aria-pressed={p.bbox?.join() === pr.bbox.join()}
-            onClick={() => p.setBBox(pr.bbox)}>{pr.name}</button>
-        ))}
-        <button className={chip(p.drawing)} aria-pressed={p.drawing} onClick={() => p.setDrawing(!p.drawing)}>
-          {p.drawing ? 'Drawing… drag on map' : 'Draw box'}
-        </button>
-        <button className={chip(false)} onClick={() => p.setBBox(undefined)} disabled={!p.bbox}>Clear</button>
-      </div>
-      <form className="grid grid-cols-[repeat(4,1fr)_auto] gap-1.5 items-end"
-        onSubmit={e => { e.preventDefault(); if (valid) p.setBBox(nums as BBox) }}>
-        {['West °E', 'South °N', 'East °E', 'North °N'].map((l, i) => (
-          <label key={l} className="text-[10px] text-faint">
-            {l}
-            <input className="num mt-0.5 w-full h-7 px-1.5 bg-bg border border-line rounded-sm text-[12px] text-ink"
-              inputMode="decimal" value={v[i]} onChange={e => setV(v.map((x, j) => (j === i ? e.target.value : x)))} />
-          </label>
-        ))}
-        <button type="submit" disabled={!valid}
-          className="h-7 px-2.5 text-[12px] border border-line rounded-sm bg-raised hover:border-dim disabled:opacity-40">Apply</button>
-      </form>
-    </Card>
-  )
-}
-
-function Kpis({ s, nYears }: { s: Summary; nYears: number }) {
-  const d = s.latest_pct_vs_median
-  const arrow = d == null ? '' : d > 0 ? '▲ ' : d < 0 ? '▼ ' : ''
-  const cards: [string, ReactNode, ReactNode?][] = [
-    ['Total hotspots', fmt(s.total), 'VIIRS-equivalent'],
-    ['Peak month', s.peak_month ? monthLabel(s.peak_month) : '—', `${fmt(s.peak_month_hotspots)} hotspots`],
-    ['Peak year', s.peak_year ?? '—', `${fmt(s.peak_year_hotspots)} hotspots`],
-    ['Busiest calendar month', s.busiest_calendar_month ? MONTHS[s.busiest_calendar_month - 1] : '—', `mean ${fmt(s.busiest_calendar_month_mean)}`],
-    [`${monthLabel(s.latest_month)} vs median`,
-      <span style={{ color: d == null || d === 0 ? undefined : d > 0 ? ACCENT : BELOW }}>{arrow}{pct(d)}</span>,
-      `${fmt(s.latest_hotspots)} vs ${fmt(s.latest_hist_median)} median`],
-    ['Anomalous months', fmt(s.anomalous_months), nYears < 6 ? `needs ≥ 6 years (have ${nYears})` : '|z| > 2'],
-  ]
+function Kpis({ s, rows }: { s: Summary; rows?: SeriesRow[] }) {
+  const vs = (cur: number, med: number) => {
+    if (!(med > 0)) return { text: '—', color: undefined }
+    const d = ((cur - med) / med) * 100
+    if (Math.abs(d) < 5) return { text: '≈ normal', color: undefined }
+    return { text: `${d > 0 ? '▲ +' : '▼ −'}${Math.abs(Math.round(d))}%`, color: d > 0 ? ACCENT : BELOW }
+  }
+  const sel = (rows ?? []).filter(r => r.month >= s.start && r.month <= s.end)
+  let cards: [string, ReactNode, ReactNode?][]
+  if (s.start === s.end && sel.length) {
+    const r = sel[0], mon = MONTHS[+r.month.slice(5, 7) - 1], yr = r.month.slice(0, 4)
+    const same = (rows ?? []).filter(x => x.month.slice(5, 7) === r.month.slice(5, 7)).map(x => x.hotspots).sort((x, y) => y - x)
+    const rank = same.indexOf(r.hotspots) + 1
+    const yearTotal = (rows ?? []).filter(x => x.month.startsWith(yr)).reduce((t, x) => t + x.hotspots, 0)
+    const ord = (n: number) => `${n}${['th', 'st', 'nd', 'rd'][n % 100 > 10 && n % 100 < 14 ? 0 : Math.min(n % 10, 4) % 4] ?? 'th'}`
+    const v = vs(r.hotspots, r.hist_median)
+    cards = [
+      [`Hotspots, ${monthLabel(r.month)}`, fmt(r.hotspots), 'VIIRS-equivalent'],
+      [`vs median for ${mon}`, <span style={{ color: v.color }}>{v.text}</span>, `median ${fmt(r.hist_median)}`],
+      ['Rank', `${ord(rank)} of ${same.length}`, `highest ${mon} since ${rows![0].month.slice(0, 4)}`],
+      [`Share of ${yr}`, yearTotal ? `${Math.round((r.hotspots / yearTotal) * 100)}%` : '—', `of ${fmt(yearTotal)} in ${yr}`],
+    ]
+  } else {
+    const total = sel.reduce((t, x) => t + x.hotspots, 0), normal = sel.reduce((t, x) => t + x.hist_median, 0)
+    const v = vs(total, normal)
+    cards = [
+      ['Total hotspots', fmt(s.total), `${sel.length} months, VIIRS-equivalent`],
+      ['Peak month in range', s.peak_month ? monthLabel(s.peak_month) : '—', `${fmt(s.peak_month_hotspots)} hotspots`],
+      ['vs normal', <span style={{ color: v.color }}>{v.text}</span>, `normal ${fmt(normal)}`],
+      ['Anomalous months', fmt(s.anomalous_months), '|z| > 2'],
+    ]
+  }
   return (
     <div className="grid grid-cols-2 gap-2">
       {cards.map(([k, v, sub]) => (
         <div key={k} className="bg-panel border border-line rounded-md px-3 py-2">
           <div className="text-[11px] text-dim">{k}</div>
           <div className="num text-[18px] leading-7 text-ink">{v}</div>
-          {sub && <div className="num text-[10px] text-faint">{sub}</div>}
+          {sub && <div className="text-[11px] text-faint">{sub}</div>}
         </div>
       ))}
     </div>
@@ -268,98 +301,3 @@ function DataNotes({ meta }: { meta: Meta }) {
   )
 }
 
-/* ---------- chart options ---------- */
-
-/** January labels only, thinned to about 8 so long records stay readable */
-const yearTick = (rows: SeriesRow[]) => {
-  const step = Math.max(1, Math.ceil(rows.length / 12 / 8))
-  return (m: string) => (m.endsWith('-01') && +m.slice(0, 4) % step === 0 ? m.slice(0, 4) : '')
-}
-
-function useCalendar(rows: SeriesRow[]) {
-  return useMemo(() => {
-    const years = [...new Set(rows.map(r => r.month.slice(0, 4)))]
-    const max = Math.max(1, ...rows.map(r => r.hotspots))
-    const byKey = new Map(rows.map(r => [r.month, r]))
-    const cell = (r: SeriesRow) => [+r.month.slice(5, 7) - 1, years.indexOf(r.month.slice(0, 4)), r.hotspots]
-    return {
-      ...BASE,
-      grid: { left: 40, right: 8, top: 4, bottom: 52 },
-      tooltip: {
-        ...TIP,
-        formatter: (q: any) => {
-          const r = byKey.get(`${years[q.value[1]]}-${String(q.value[0] + 1).padStart(2, '0')}`)
-          if (!r) return ''
-          return `${monthLabel(r.month)}<br/>${fmt(r.hotspots)} hotspots<br/>${pct(r.pct_vs_median)} vs median (${fmt(r.hist_median)})`
-            + `<br/>z ${r.z.toFixed(2)}${r.flag ? ` · ${r.flag}` : ''}<br/><span style="color:#9AA3AE">${r.source === 'VIIRS' ? 'VIIRS' : 'MODIS-scaled to VIIRS'}</span>`
-            + (r.note ? `<br/><span style="color:#E8743B">${r.note}</span>` : '')
-        },
-      },
-      xAxis: { type: 'category', data: MONTHS, ...AXIS, splitLine: { show: false } },
-      yAxis: { type: 'category', data: years, inverse: true, ...AXIS, splitLine: { show: false } },
-      visualMap: {
-        min: 0, max, seriesIndex: 0, calculable: false, orient: 'horizontal', left: 40, bottom: 0, itemWidth: 10, itemHeight: 200,
-        inRange: { color: CIVIDIS }, text: [fmt(max), '0'], textStyle: { color: '#9AA3AE', fontSize: 10, fontFamily: 'IBM Plex Mono' },
-      },
-      series: [
-        {
-          type: 'heatmap', data: rows.map(r => ({
-            value: cell(r),
-            itemStyle: r.flag ? { borderColor: r.flag === 'unusually high' ? ACCENT : BELOW, borderWidth: 2 }
-              : r.note ? { borderColor: '#E6E8EB', borderWidth: 1, borderType: 'dashed' } : undefined,
-          })),
-          itemStyle: { borderColor: '#14171C', borderWidth: 1 }, emphasis: { itemStyle: { borderColor: '#E6E8EB', borderWidth: 1 } },
-        },
-        {
-          type: 'scatter', symbol: STAR, symbolSize: 9, silent: true, z: 3,
-          data: rows.filter(r => r.flag).map(r => ({ value: cell(r), itemStyle: { color: r.flag === 'unusually high' ? ACCENT : BELOW } })),
-        },
-      ],
-    }
-  }, [rows])
-}
-
-function useLine(rows: SeriesRow[]) {
-  return useMemo(() => {
-    const x = rows.map(r => r.month)
-    const lo = rows.map(r => Math.max(0, r.mean - r.std))
-    return {
-      ...BASE,
-      grid: { left: 52, right: 8, top: 30, bottom: 24 },
-      legend: { ...LEGEND, data: ['Harmonized', 'Median', 'Mean ± 1σ', 'Anomaly'] },
-      tooltip: { ...TIP, trigger: 'axis', valueFormatter: (v: number) => fmt(v) },
-      xAxis: { type: 'category', data: x, ...AXIS, splitLine: { show: false }, axisLabel: { ...AXIS.axisLabel, formatter: yearTick(rows) , interval: 0 } },
-      yAxis: { type: 'value', ...AXIS },
-      series: [
-        { name: 'band-lo', type: 'line', data: lo, stack: 'band', symbol: 'none', lineStyle: { opacity: 0 }, tooltip: { show: false } },
-        { name: 'Mean ± 1σ', type: 'line', data: rows.map((r, i) => r.mean + r.std - lo[i]), stack: 'band', symbol: 'none', lineStyle: { opacity: 0 }, areaStyle: { color: 'rgba(154,163,174,0.16)' }, itemStyle: { color: 'rgba(154,163,174,0.4)' } },
-        { name: 'Median', type: 'line', data: rows.map(r => r.hist_median), symbol: 'none', lineStyle: { color: SERIES.median, width: 1, type: 'dashed' }, itemStyle: { color: SERIES.median } },
-        { name: 'Harmonized', type: 'line', data: rows.map(r => r.hotspots), symbol: 'none', lineStyle: { color: SERIES.harmonized, width: 1.5 }, itemStyle: { color: SERIES.harmonized } },
-        { name: 'Anomaly', type: 'scatter', symbol: STAR, symbolSize: 10, itemStyle: { color: SERIES.anomaly }, data: rows.map(r => (r.flag ? r.hotspots : null)) },
-      ],
-    }
-  }, [rows])
-}
-
-function useBeforeAfter(rows: SeriesRow[], meta: Meta) {
-  return useMemo(() => {
-    const x = rows.map(r => r.month)
-    const marks = meta.viirs_start > meta.first_month
-      ? { markLine: { silent: true, symbol: 'none', label: { formatter: 'VIIRS starts', color: '#9AA3AE', fontSize: 10 }, lineStyle: { color: '#6B7480', type: 'dotted' }, data: [{ xAxis: meta.viirs_start }] } }
-      : {}
-    return {
-      ...BASE,
-      grid: { left: 52, right: 8, top: 30, bottom: 24 },
-      legend: { ...LEGEND },
-      tooltip: { ...TIP, trigger: 'axis', valueFormatter: (v: number) => fmt(v) },
-      xAxis: { type: 'category', data: x, ...AXIS, splitLine: { show: false }, axisLabel: { ...AXIS.axisLabel, formatter: yearTick(rows), interval: 0 } },
-      yAxis: { type: 'value', ...AXIS },
-      series: [
-        { name: 'MODIS raw', type: 'line', data: rows.map(r => r.modis), symbol: 'none', lineStyle: { color: SERIES.modis, width: 1 }, itemStyle: { color: SERIES.modis }, ...marks },
-        { name: 'VIIRS raw', type: 'line', data: rows.map(r => (r.month < meta.viirs_start ? null : r.viirs)), symbol: 'none', lineStyle: { color: SERIES.viirs, width: 1 }, itemStyle: { color: SERIES.viirs } },
-        { name: 'MODIS × k', type: 'line', data: rows.map(r => r.modis_scaled), symbol: 'none', lineStyle: { color: SERIES.modis, width: 1, type: 'dashed' }, itemStyle: { color: SERIES.modis } },
-        { name: 'Harmonized', type: 'line', data: rows.map(r => r.hotspots), symbol: 'none', lineStyle: { color: SERIES.harmonized, width: 2 }, itemStyle: { color: SERIES.harmonized }, z: 1 },
-      ],
-    }
-  }, [rows, meta])
-}

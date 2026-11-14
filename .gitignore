@@ -16,3 +16,4 @@ frontend/.env
 .agents/
 .claude/
 skills-lock.json
+data_prep/boundaries_raw/

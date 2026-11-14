@@ -1,8 +1,8 @@
-# FireLedger — harmonized MODIS + VIIRS burning activity calendar
+# Hots45 — harmonized MODIS + VIIRS burning activity calendar
 
 NASA Space Apps 2026 · *Harmonization of MODIS and VIIRS Hot Spots*
 
-FireLedger merges the long MODIS active-fire record (2000→) with VIIRS S-NPP (2012→) into one
+Hots45 merges the long MODIS active-fire record (2000→) with VIIRS S-NPP (2012→) into one
 **VIIRS-equivalent** monthly hotspot series, so the sensor of origin no longer matters. Pick a region and
 period on a 3D globe/map and see a month × year burning calendar, the comparison with the historical median,
 anomalies (|z| > 2), and before/after-harmonization charts. You can download the hotspots as CSV.
@@ -26,6 +26,7 @@ cd data_prep
 ../.venv/bin/python check_real_data.py data_asia
 ../.venv/bin/python fire_harmonize.py --modis "data_asia/fire_*_M-C61_*.csv" --viirs "data_asia/fire_*_SV-C2_*.csv" \
     --start 2003-01 --end 2026-10 --fit-end 2021-12 --region Asia --report "Punjab-Haryana:73.8,28.4,77.6,32.6"
+../.venv/bin/python build_boundaries.py   # states/districts for search, labels, polygon areas (~11 min first run)
 cd ..
 
 # 2. Build the frontend once, then one process serves everything
@@ -35,7 +36,7 @@ cd frontend && npm install && npm run build && cd ..
 
 For frontend development, run `npm run dev` in `frontend/` while uvicorn runs. Vite proxies `/api` to port 8000.
 
-Tests: `.venv/bin/python -m pytest backend data_prep`
+Tests: `.venv/bin/python -m pytest backend data_prep` and `cd frontend && npm test` (timeline state).
 
 ### Configuration (.env)
 
@@ -143,8 +144,18 @@ All queries are parameterized DuckDB over Parquet. Invalid input returns a 400 e
   set `APP_DATA` to its path.
 - **Frontend → Vercel:** set the project root to `frontend/` (`vercel.json` included). Set `VITE_API_URL` to the Render URL.
 
+## Boundaries and search
+
+`data_prep/build_boundaries.py` downloads geoBoundaries (gbOpen) states and districts for every country in the box.
+India uses its official boundaries (Local Government Directory), and other countries' polygons have India's territory
+subtracted, so the map follows India's point of view. The script writes `admin.parquet`, plus `cell_admin.parquet`,
+which gives the district of every 0.05° cell. That makes polygon analytics and the district Top 10 a fast join.
+Search is offline for countries, states and districts. Places go to the Photon geocoder (cached, at most 1 request/s).
+Set `GEOCODER_USER_AGENT` to identify your deployment, and `GEOCODER_URL` to use your own Photon or Nominatim instance.
+
 ## Data sources and credits
 
 - Active fires: NASA FIRMS. MODIS MCD14ML and VIIRS S-NPP VNP14IMGML (375 m), from https://firms.modaps.eosdis.nasa.gov/
 - Imagery: NASA GIBS Blue Marble Shaded Relief + Bathymetry, VIIRS Black Marble (2016). Dark basemap: © CARTO, © OpenStreetMap contributors.
+- Boundaries: geoBoundaries gbOpen (CC BY 4.0 / ODbL, per country). Place search: Photon by Komoot, © OpenStreetMap contributors.
 - This project is not endorsed by NASA. No NASA insignia are used.
