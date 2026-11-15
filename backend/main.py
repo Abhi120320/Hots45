@@ -347,8 +347,8 @@ def download(bbox: str = None, start: str = None, end: str = None, region: str =
         w, p = where(parse_bbox(bbox), s, e, reg)
     # Refuse oversized exports up front (cheap count from the cell table): a whole-record CSV is ~46 M rows, which
     # fills /tmp and, on serverless, exceeds the response size limit, so the browser just shows a cancelled download.
-    cw, cp = where(None if reg else parse_bbox(bbox), s, e, reg)
-    n = int(db.execute(f"SELECT coalesce(sum(modis + viirs), 0) FROM read_parquet('{CELLS}') WHERE {cw}", cp).fetchall()[0][0])
+    cw, cp = where(None if reg else parse_bbox(bbox), s, e, reg, alias="c.")
+    n = int(db.cursor().execute(f"SELECT coalesce(sum(c.modis + c.viirs), 0) FROM read_parquet('{CELLS}') c WHERE {cw}", cp).fetchall()[0][0])
     if n > MAX_DOWNLOAD_ROWS:
         raise HTTPException(413, f"This selection has about {n:,} hotspots; the download limit is {MAX_DOWNLOAD_ROWS:,}. "
                                  "Pick a smaller area or a shorter period.")

@@ -5,3 +5,4 @@ matplotlib
 pytest
 httpx
 shapely==2.2.0
+duckdb==2.0.0

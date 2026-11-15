@@ -118,8 +118,10 @@ def main(argv=None):
     units = {1: [], 2: []}
     for iso, level in jobs:
         units[level] += load(iso, level, a.bbox)
-    if not units[1]:
-        sys.exit("no ADM1 boundaries downloaded")
+    # every country needs its ADM1 layer (ADM2 is optional): a failed download must not publish a map without it
+    missing = [iso for iso in COUNTRIES if not fetch(iso, 1)]  # cached by now; None = the download failed
+    if missing:
+        sys.exit(f"ADM1 boundaries missing for {', '.join(missing)}; re-run to retry the downloads")
 
     # India's point of view: India's official extent wins wherever another country's polygon overlaps it.
     india = shapely.union_all([u["geom"] for u in units[1] if u["iso"] == "IND"])

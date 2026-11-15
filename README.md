@@ -23,8 +23,8 @@ python3.12 -m venv .venv
 
 # 1. Build the app data (real FIRMS CSVs in data_prep/data/)
 cd data_prep
-../.venv/bin/python check_real_data.py data_asia
-../.venv/bin/python fire_harmonize.py --modis "data_asia/fire_*_M-C61_*.csv" --viirs "data_asia/fire_*_SV-C2_*.csv" \
+../.venv/bin/python check_real_data.py data
+../.venv/bin/python fire_harmonize.py --modis "data/fire_*_M-C61_*.csv" --viirs "data/fire_*_SV-C2_*.csv" \
     --start 2003-01 --end 2026-10 --fit-end 2021-12 --region Asia --report "Punjab-Haryana:73.8,28.4,77.6,32.6"
 ../.venv/bin/python build_boundaries.py   # states/districts for search, labels, polygon areas (~11 min first run)
 cd ..
@@ -56,7 +56,7 @@ To run locally with the file: `.venv/bin/uvicorn backend.main:app --env-file .en
 ```bash
 cp .env.example .env                       # optional
 # build app data from the CSVs in data_prep/data/ (writes backend/app_data/)
-docker compose run --rm prep --modis "data_asia/fire_*_M-C61_*.csv" --viirs "data_asia/fire_*_SV-C2_*.csv" --start 2003-01 --end 2026-10 --fit-end 2021-12 --region Asia
+docker compose run --rm prep --modis "data/fire_*_M-C61_*.csv" --viirs "data/fire_*_SV-C2_*.csv" --start 2003-01 --end 2026-10 --fit-end 2021-12 --region Asia
 docker compose run --rm --entrypoint python prep check_real_data.py   # pre-flight check
 docker compose up --build -d               # http://localhost:8000
 ```
@@ -138,11 +138,11 @@ All queries are parameterized DuckDB over Parquet. Invalid input returns a 400 e
 
 ## Deploy
 
-- **Backend → Render:** `render.yaml` in the repo root. Set `CORS_ORIGINS` to your Vercel URL.
-  `backend/app_data/` is gitignored. For a demo deploy of a small dataset, commit it with
-  `git add -f backend/app_data`. For the full archive, which is too large for git, mount a Render disk and
-  set `APP_DATA` to its path.
-- **Frontend → Vercel:** set the project root to `frontend/` (`vercel.json` included). Set `VITE_API_URL` to the Render URL.
+- **Vercel (one project, two services):** the root `vercel.json` runs the FastAPI backend (`/api/*`) and the
+  Vite frontend (everything else). `backend/app_data/` is gitignored and too large for git, so publish it as a
+  GitHub Release with `python data_prep/export_release.py backend/app_data OUT_DIR` and set `DATA_URL` to the
+  release's download URL. The backend then reads points over HTTP and caches the small files in `/tmp`.
+- **Docker:** `docker compose up --build` serves the app and the local `backend/app_data` on port 8000.
 
 ## Boundaries and search
 

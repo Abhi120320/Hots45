@@ -52,7 +52,7 @@ function Main({ meta }: { meta: Meta }) {
   const [mapMode, setMapMode] = useState<MapMode>('hotspots')
   const [minPct, setMinPct] = useState(30)
   const [scaleMode, setScaleMode] = useState<ScaleMode>('fixed')
-  const [spark, setSpark] = useState<SeriesRow[]>()
+  const [sparkFor, setSparkFor] = useState<{ key: string; rows?: SeriesRow[] }>() // the Panel's monthly series, tagged with its area
 
   const [start, end] = [months[tl.a], months[tl.b]] // the selection (panel, calendar, KPIs)
   const [mStart, mEnd] = [start, end] // map, legend, banner, KPIs and URL always show the selection; hover is only a hint
@@ -73,8 +73,8 @@ function Main({ meta }: { meta: Meta }) {
     const snap = (v: number, f: (x: number) => number, lo: number, hi: number) => Math.min(hi, Math.max(lo, f(v / step) * step))
     return [snap(w, Math.floor, -180, 180), snap(s, Math.floor, -90, 90), snap(e, Math.ceil, -180, 180), snap(n, Math.ceil, -90, 90)]
   }, [longitude, latitude, zoom, pitch, bearing, grid, panelOpen, panelW])
-  const cells = useApi<Cell[]>(url('/api/map', { start: mStart, end: mEnd, grid, bbox: view }), 150, true)
-  const anomaly = useApi<AnomalyCell[]>(mapMode === 'anomaly' ? url('/api/anomaly', { start: mStart, end: mEnd, grid, bbox: view }) : null, 150, true)
+  const cells = useApi<Cell[]>(url('/api/map', { start: mStart, end: mEnd, grid, bbox: view }), 150, `${mStart}|${mEnd}|${grid}`)
+  const anomaly = useApi<AnomalyCell[]>(mapMode === 'anomaly' ? url('/api/anomaly', { start: mStart, end: mEnd, grid, bbox: view }) : null, 150, `${mStart}|${mEnd}|${grid}`)
   const scale = useApi<{ q: Record<string, number> }>(url('/api/scale', { grid }))
   const active = mapMode === 'anomaly' ? anomaly : cells
 
@@ -139,6 +139,10 @@ function Main({ meta }: { meta: Meta }) {
     if (i >= 0) dispatch({ type: 'month', i })
   }, [months])
 
+  const ap = useMemo(() => areaParams(area), [area])
+  const areaKey = ap.region ?? ap.bbox?.join(',') ?? 'all'
+  const setSpark = useCallback((rows?: SeriesRow[]) => setSparkFor({ key: areaKey, rows }), [areaKey])
+  const spark = sparkFor?.key === areaKey ? sparkFor.rows : undefined // never show another area's rows (panel hidden)
   // map header: what the map shows, its total and how that compares with normal (selected area's series)
   const overlay = useMemo(() => {
     const r = (spark ?? []).filter(x => x.month >= mStart && x.month <= mEnd)
@@ -147,7 +151,6 @@ function Main({ meta }: { meta: Meta }) {
     return { total, pct: normal > 0 ? ((total - normal) / normal) * 100 : null }
   }, [spark, mStart, mEnd])
   const areaName = area ? ('region' in area ? regionLabel(area.region) : PRESETS.find(pr => pr.bbox.join() === area.bbox.join())?.name ?? 'selected box') : (meta.region ?? 'full extent')
-  const ap = useMemo(() => areaParams(area), [area])
 
   // ---------- URL: restore the area once, then keep the address bar in sync (shareable links) ----------
   useEffect(() => {
@@ -271,7 +274,7 @@ function Main({ meta }: { meta: Meta }) {
       </main>
 
       <TimelineChart meta={meta} months={months} tl={tl} dispatch={dispatch} lastComplete={lastCompleteIdx} rows={spark}
-        area={ap} areaKey={ap.region ?? ap.bbox?.join(',') ?? 'all'} areaName={areaName} onPreview={setPreview}
+        area={ap} areaKey={areaKey} areaName={areaName} onPreview={setPreview}
         expandHref={expand('timeline').href} onExpand={expand('timeline').onClick} />
 
       {route.chart && (

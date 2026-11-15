@@ -29,6 +29,8 @@ export default function Alerts({ meta, area, setArea, months, dispatch }: {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const [renaming, setRenaming] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
+  const [failed, setFailed] = useState(0) // areas whose check failed: never report those as "no alerts"
+  const [retry, setRetry] = useState(0)
   const asof = sim ?? dataEnd
   const update = (w: Watched[]) => { setWatched(w); save(w) }
 
@@ -36,11 +38,17 @@ export default function Alerts({ meta, area, setArea, months, dispatch }: {
   useEffect(() => {
     let live = true
     setChecking(true)
-    Promise.all(watched.map(w => fetch(url('/api/alerts', { asof, region: w.region, bbox: w.bbox })).then(r => (r.ok ? r.json() : [])).catch(() => [])
-      .then((as: Alert[]) => as.map(a => ({ ...a, area: w, id: `${w.key}|${a.kind}|${a.asof}` })))))
-      .then(all => { if (live) { setFeed(all.flat().sort((a, b) => RANK[b.severity] - RANK[a.severity] || b.asof.localeCompare(a.asof))); setChecking(false) } })
+    Promise.all(watched.map(w => fetch(url('/api/alerts', { asof, region: w.region, bbox: w.bbox }))
+      .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json() })
+      .then((as: Alert[]) => as.map(a => ({ ...a, area: w, id: `${w.key}|${a.kind}|${a.asof}` })), () => null)))
+      .then(all => {
+        if (!live) return
+        setFailed(all.filter(x => x === null).length)
+        setFeed(all.flatMap(x => x ?? []).sort((a, b) => RANK[b.severity] - RANK[a.severity] || b.asof.localeCompare(a.asof)))
+        setChecking(false)
+      })
     return () => { live = false }
-  }, [watched, asof])
+  }, [watched, asof, retry])
   const shown = feed.filter(a => !dismissed.has(a.id))
 
   const watchCurrent = () => {
@@ -102,7 +110,13 @@ export default function Alerts({ meta, area, setArea, months, dispatch }: {
           <ul className="flex flex-col gap-2 mb-3">
             {watched.length === 0 && <li className="text-faint">Watch an area to get alerts for it.</li>}
             {checking && <li className="text-faint" role="status">Checking {watched.length} watched area{watched.length === 1 ? '' : 's'}… (first check of an area can take a few seconds)</li>}
-            {!checking && watched.length > 0 && shown.length === 0 && <li className="text-faint">No alerts for your watched areas as of this date.</li>}
+            {!checking && failed > 0 && (
+              <li className="text-[#E8743B]" role="alert">
+                Could not check {failed} watched area{failed === 1 ? '' : 's'}.{' '}
+                <button className="underline" onClick={() => setRetry(n => n + 1)}>Retry</button>
+              </li>
+            )}
+            {!checking && failed === 0 && watched.length > 0 && shown.length === 0 && <li className="text-faint">No alerts for your watched areas as of this date.</li>}
             {shown.map(a => (
               <li key={a.id} className="border border-line rounded-sm p-2">
                 <div className="flex items-center gap-2 mb-1">

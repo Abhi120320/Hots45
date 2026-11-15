@@ -93,6 +93,9 @@ def test_download_too_large_gives_a_reason(monkeypatch):
     monkeypatch.setattr(m, "MAX_DOWNLOAD_ROWS", 0)
     r = c.get("/api/download", params={"bbox": BBOX})
     assert r.status_code == 413 and "smaller area" in r.json()["detail"]
+    # the size check counts only the region's cells (Punjab: 42), not the whole period (48)
+    monkeypatch.setattr(m, "MAX_DOWNLOAD_ROWS", 42)
+    assert c.get("/api/download", params={"region": "a1"}).status_code == 200
 
 
 def test_validation_400():

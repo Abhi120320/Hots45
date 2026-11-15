@@ -50,7 +50,7 @@ def csv_scan(files, sensor):
     """SQL for one sensor's raw rows. NRT files lack `type`; union_by_name fills it with NULL."""
     lst = "[" + ",".join("'" + f.replace("'", "''") + "'" for f in files) + "]"
     return (f"SELECT '{sensor}' AS sensor, latitude, longitude, acq_date, acq_time, confidence, frp, type, "
-            f"contains(lower(filename), 'nrt') AS is_nrt, filename "
+            f"contains(lower(parse_filename(filename)), 'nrt') AS is_nrt, filename "
             f"FROM read_csv({lst}, union_by_name=true, filename=true, header=true, "
             f"types={{'confidence':'VARCHAR','acq_time':'VARCHAR','acq_date':'DATE','type':'INTEGER'}})")
 
@@ -408,7 +408,7 @@ def main(argv=None):
                 "n": {f"{r.cal:02d}": int(r.n) for r in g.itertuples()},
             } for (tx, ty), g in tiles.groupby(["tx", "ty"])},
         "tile_months_fallback": n_fb,
-        "r2_overlap": round(r2_main, 4),
+        "r2_overlap": round(r2_main, 4) if np.isfinite(r2_main) else None,  # undefined on tiny inputs; NaN is not JSON
         "fit_window": [viirs_start, fit_end],
         "data_gaps": gaps,
         "gap_months": gap_months,
@@ -421,7 +421,7 @@ def main(argv=None):
                    f"calendar month. Before {viirs_start} hotspots = k × MODIS; from {viirs_start} hotspots = VIIRS."),
         "data_source": "synthetic_sample" if a.sample else "nasa_firms",
     }
-    (out / "meta.json").write_text(json.dumps(meta, indent=2))
+    (out / "meta.json").write_text(json.dumps(meta, indent=2, allow_nan=False))
 
     print(f"\nMonths {months[0]} .. {months[-1]}  |  VIIRS from {viirs_start}  |  domain overlap months: {n_ov}")
     print(f"domain k global = {k_global:.3f}")

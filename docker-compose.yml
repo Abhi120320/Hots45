@@ -9,6 +9,7 @@ services:
       - path: .env
         required: false  # FIRMS_MAP_KEY etc.; never baked into the image
     environment:
+      PORT: 8000  # the container always listens on 8000; ${PORT} above only picks the host port
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     volumes:
       - ./backend/app_data:/app/backend/app_data:ro
