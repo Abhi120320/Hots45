@@ -15,8 +15,8 @@ import urllib.request
 from functools import lru_cache
 from pathlib import Path
 
+import duckdb
 import numpy as np
-import pandas as pd
 import shapely
 
 LEVEL_ORDER = {0: 0, 1: 1, 2: 2}
@@ -42,9 +42,11 @@ class Admin:
         self.ok = p.exists()
         if not self.ok:
             return
-        self.df = pd.read_parquet(p)
+        # DuckDB, not pd.read_parquet: the API ships without pyarrow (130 MB), which Vercel would otherwise install into the
+        # same 500 MB /tmp that holds the data cache
+        self.df = duckdb.execute("SELECT * FROM read_parquet(?)", [str(p)]).df()
         self.df["name"] = self.df.name.fillna("")  # placeholder units keep their outline but have no name
-        self.geoms = shapely.from_wkb(self.df.geometry.to_numpy())
+        self.geoms = shapely.from_wkb(np.array([bytes(g) for g in self.df.geometry], dtype=object))  # DuckDB BLOB -> bytearray
         self.df["key"] = self.df.name.map(norm)
         # hierarchy shown in results: district -> "State, Country"; state -> "Country"; country -> ""
         self.df["parent"] = [", ".join(x for x in (a, c) if isinstance(x, str)) if lvl == 2 else ("" if lvl == 0 else c)
