@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    base_branches:
+      - main
+      - review-base
+  path_filters:
+    # data
+    - "!**/app_data/**"
+    - "!**/app_data_*/**"
+    - "!data/**"
+    - "!**/*.parquet"
+    - "!**/*.csv"
+    - "!**/*.geojson"
+    - "!**/*.tar.gz"
+    # images
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.gif"
+    - "!**/*.svg"
+    - "!**/*.ico"
+    - "!**/*.webp"
+    # build output and dependencies
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/node_modules/**"
+    - "!**/__pycache__/**"
+    - "!**/.venv/**"
+    # lock files
+    - "!**/package-lock.json"
+    - "!**/pnpm-lock.yaml"
+    - "!**/yarn.lock"
+    - "!**/uv.lock"
+    - "!**/poetry.lock"
