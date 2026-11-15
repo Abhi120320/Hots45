@@ -27,9 +27,38 @@ export interface Meta {
   month_notes?: Record<string, string>
   coverage_bbox?: BBox
   has_boundaries?: boolean
+  frp?: {
+    unit: string; factor_global: number; factor_by_month: Record<string, number>; r2_overlap: number; fit_window: [string, string]
+    method: string; tile_months_fallback: number
+    regions?: Record<string, { r2_fit: number | null; yearly_ratio_cv?: number | null }>
+    tiles?: { tile: string; share_of_viirs_frp: number; r2: number | null; yearly_ratio_cv: number | null; yearly_ratio_range: [number, number] | null; unreliable: boolean }[]
+  }
+  land_cover?: { product: string; note: string; map_years: number[]; groups: LcGroup[]; classes: Record<string, string> }
 }
 
-export interface Cell { lon: number; lat: number; hotspots: number; modis: number; viirs: number }
+/** /api/intensity: per-sensor FRP per hotspot (never harmonized) */
+export interface Intensity { unit: string; note: string; sensors: Record<'MODIS' | 'VIIRS', { n: number; mean: number; p90: number; total: number } | null> }
+
+/** /api/outlook: statistical outlook for the next 1-3 months, with its backtest (see backend/outlook.py) */
+export interface OutlookMonth {
+  month: string; horizon: number; pred: number; lo: number; hi: number; normal: number; p_above: number; text: string
+  using: 'model' | 'reference'; weight: number | null
+  trend: { slope_per_year: number; p: number; applied: boolean; factor: number }; persistence: { ratio: number }
+}
+interface Score { n: number; mae_model: number; mae_reference: number; coverage_model: number; coverage_reference: number; coverage_model_calibrated: number | null; n_calibrated: number; calibrated_from: string | null }
+export interface Outlook {
+  cutoff: string; using: 'model' | 'reference' | 'mixed'; months: OutlookMonth[]; disclaimer: string
+  backtest: (Score & { skill: number; period: [string, string]; by_horizon: Record<string, Score> }) | null
+  season: { start: { date: string; lo: string; hi: string }; peak: { date: string; lo: string; hi: string }; end: { date: string; lo: string; hi: string }; years: number; underway: boolean } | null
+  provisional_inputs: string[]; gap_inputs: string[]
+}
+
+export interface LcGroup { key: string; label: string; classes: number[] }
+
+/** /api/landcover: harmonized hotspots per land-cover group in an area and period */
+export interface LandCover { total: number; groups: (LcGroup & { hotspots: number; share: number })[]; text: string; note: string }
+
+export interface Cell { lon: number; lat: number; hotspots: number; modis: number; viirs: number; lc?: number; lc_share?: number; frp?: number }
 
 export interface AnomalyCell { lon: number; lat: number; current: number; baseline: number; diff: number; z: number }
 

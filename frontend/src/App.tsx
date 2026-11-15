@@ -5,15 +5,18 @@ import { fmt, monthLabel, monthsBetween, reducedMotion } from './colors'
 import Earth, { GLOBE_MAX_ZOOM, IMAGERY, gridFor, type Imagery, type MapMode, type ScaleMode, type ViewState } from './Earth'
 import Panel from './Panel'
 import TimelineChart from './TimelineChart'
+import { IconButton, Menu, Segmented, menuItemCls } from './ui'
 import ChartView from './ChartView'
 import Alerts from './Alerts'
 import { PRESETS } from './Area'
 import { decodeArea, stateQuery, useRoute, type ChartKey } from './url'
 import type { Region } from './api'
 import { initTL, reduceTL, type TLAction } from './timeline'
+import type { Metric } from './Metric'
 
 const PANEL_KEY = 'hots45.panelWidth'
 const panelMax = () => Math.min(900, Math.round(window.innerWidth * 0.6))
+const PANEL_MIN = 320, PANEL_DEFAULT = 400
 
 export default function App() {
   const meta = useApi<Meta>(url('/api/meta', {}))
@@ -46,12 +49,14 @@ function Main({ meta }: { meta: Meta }) {
   const [area, setAreaState] = useState<Area>(null)
   const [drawing, setDrawing] = useState(false)
   const [panelOpen, setPanelOpen] = useState(true)
-  const [panelW, setPanelW] = useState(() => { try { return Math.min(panelMax(), Math.max(340, +(localStorage.getItem(PANEL_KEY) ?? 440) || 440)) } catch { return 440 } })
+  const [panelW, setPanelW] = useState(() => { try { return Math.min(panelMax(), Math.max(PANEL_MIN, +(localStorage.getItem(PANEL_KEY) ?? PANEL_DEFAULT) || PANEL_DEFAULT)) } catch { return PANEL_DEFAULT } })
   // Blue Marble suits the globe; the dark basemap lets data stand out on the 3D map. Each view keeps its own choice.
   const [imageryBy, setImageryBy] = useState<{ globe: Imagery; map: Imagery }>({ globe: 'blue', map: 'dark' })
   const [mapMode, setMapMode] = useState<MapMode>('hotspots')
   const [minPct, setMinPct] = useState(30)
   const [scaleMode, setScaleMode] = useState<ScaleMode>('fixed')
+  const [metric, setMetric] = useState<Metric>('hotspots') // calendar, timeline and KPIs: counts or FRP
+  const [fireType, setFireType] = useState('all') // calendar + timeline filter: 'all' or a land-cover group key
   const [sparkFor, setSparkFor] = useState<{ key: string; rows?: SeriesRow[] }>() // the Panel's monthly series, tagged with its area
 
   const [start, end] = [months[tl.a], months[tl.b]] // the selection (panel, calendar, KPIs)
@@ -73,9 +78,10 @@ function Main({ meta }: { meta: Meta }) {
     const snap = (v: number, f: (x: number) => number, lo: number, hi: number) => Math.min(hi, Math.max(lo, f(v / step) * step))
     return [snap(w, Math.floor, -180, 180), snap(s, Math.floor, -90, 90), snap(e, Math.ceil, -180, 180), snap(n, Math.ceil, -90, 90)]
   }, [longitude, latitude, zoom, pitch, bearing, grid, panelOpen, panelW])
-  const cells = useApi<Cell[]>(url('/api/map', { start: mStart, end: mEnd, grid, bbox: view }), 150, `${mStart}|${mEnd}|${grid}`)
+  const mapMetric = mapMode === 'intensity' ? 'frp' : undefined
+  const cells = useApi<Cell[]>(url('/api/map', { start: mStart, end: mEnd, grid, bbox: view, lc: mapMode === 'firetype' ? 1 : undefined, metric: mapMetric }), 150, `${mStart}|${mEnd}|${grid}|${mapMode}`)
   const anomaly = useApi<AnomalyCell[]>(mapMode === 'anomaly' ? url('/api/anomaly', { start: mStart, end: mEnd, grid, bbox: view }) : null, 150, `${mStart}|${mEnd}|${grid}`)
-  const scale = useApi<{ q: Record<string, number> }>(url('/api/scale', { grid }))
+  const scale = useApi<{ q: Record<string, number> }>(url('/api/scale', { grid, metric: mapMetric }))
   const active = mapMode === 'anomaly' ? anomaly : cells
 
   const periodLabel = mStart === mEnd ? monthLabel(mStart) : `${monthLabel(mStart)} – ${monthLabel(mEnd)}`
@@ -83,8 +89,8 @@ function Main({ meta }: { meta: Meta }) {
   // During playback, warm the cache for the next month so frames don't stall.
   useEffect(() => {
     const nx = months[(tl.a + 1) % n]
-    if (tl.playing) prefetch(url('/api/map', { start: nx, end: nx, grid, bbox: view }))
-  }, [tl.playing, tl.a, n, months, grid, view])
+    if (tl.playing) prefetch(url('/api/map', { start: nx, end: nx, grid, bbox: view, lc: mapMode === 'firetype' ? 1 : undefined, metric: mapMetric }))
+  }, [tl.playing, tl.a, n, months, grid, view, mapMode, mapMetric])
 
   // Start the globe over the data's weighted centre, then rotate slowly until the user interacts.
   const [centred, setCentred] = useState(false)
@@ -143,6 +149,13 @@ function Main({ meta }: { meta: Meta }) {
   const areaKey = ap.region ?? ap.bbox?.join(',') ?? 'all'
   const setSpark = useCallback((rows?: SeriesRow[]) => setSparkFor({ key: areaKey, rows }), [areaKey])
   const spark = sparkFor?.key === areaKey ? sparkFor.rows : undefined // never show another area's rows (panel hidden)
+  // timeline rows for the fire-type filter / FRP (same URL as the panel's calendar, so it is fetched once).
+  // FRP is not split by land cover, so the fire-type filter is off in Intensity.
+  const group = fireType === 'all' || metric === 'frp' ? undefined : fireType
+  const met = metric === 'frp' ? 'frp' : undefined
+  const ownRows = useApi<SeriesRow[]>((group || met) && spark ? url('/api/series', { ...ap, group, metric: met }) : null)
+  const tlRows = group || met ? ownRows.data : spark
+  const tlArea = useMemo(() => ({ ...ap, group, metric: met }), [ap, group, met])
   // map header: what the map shows, its total and how that compares with normal (selected area's series)
   const overlay = useMemo(() => {
     const r = (spark ?? []).filter(x => x.month >= mStart && x.month <= mEnd)
@@ -183,19 +196,52 @@ function Main({ meta }: { meta: Meta }) {
   // resizable side panel: drag its left edge; width remembered
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault()
-    const move = (ev: PointerEvent) => setPanelW(Math.min(panelMax(), Math.max(340, window.innerWidth - ev.clientX)))
+    const move = (ev: PointerEvent) => setPanelW(Math.min(panelMax(), Math.max(PANEL_MIN, window.innerWidth - ev.clientX)))
     const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); try { localStorage.setItem(PANEL_KEY, String(panelWRef.current)) } catch { /* ignore */ } }
     addEventListener('pointermove', move)
     addEventListener('pointerup', up)
   }
 
+  const modes = ([['hotspots', 'Hotspots'], ['anomaly', 'Anomaly'], ['heatmap', 'Heatmap'], ...(meta.frp ? [['intensity', 'Intensity']] : []),
+    ...(meta.land_cover ? [['firetype', 'Fire type']] : [])] as [MapMode, string][]).map(([value, label]) => ({ value, label,
+      title: value === 'anomaly' ? 'Change vs the median of the same months in other years' : undefined }))
+  const statusMsg = (text: string, alert = false) => (
+    <div role={alert ? 'alert' : 'status'} className={`absolute left-1/2 -translate-x-1/2 top-20 h-8 px-3 flex items-center text-sm bg-panel border rounded-md max-w-[60%] truncate ${alert ? 'border-accent/60 text-ink' : 'border-line text-dim'}`}>{text}</div>
+  )
+
   return (
     <div className="h-full flex flex-col">
       {meta.data_source === 'synthetic_sample' && (
-        <div role="alert" className="bg-accent text-bg text-center text-[12px] font-semibold py-1 tracking-wide">
-          SAMPLE DATA — not real fire observations
-        </div>
+        <div role="alert" className="bg-accent text-bg text-center text-xs font-semibold py-1">SAMPLE DATA — not real fire observations</div>
       )}
+
+      {/* top bar: title · map modes · basemap, alerts, panel, more */}
+      <header className="h-14 shrink-0 grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-4 border-b border-line bg-panel">
+        <div className="min-w-0 flex items-baseline gap-3">
+          <h1 className="text-lg font-semibold text-ink">Hots45</h1>
+          <p className="text-xs text-dim truncate hidden min-[1500px]:block">Harmonized MODIS/VIIRS burning activity record</p>
+        </div>
+        <Segmented label="Map mode" value={mapMode} onChange={setMapMode} options={modes} />
+        <div className="flex items-center justify-end gap-2 min-w-0">
+          <Segmented label="Basemap" value={imagery} onChange={setImagery}
+            options={(Object.keys(IMAGERY) as Imagery[]).map(k => ({ value: k, label: IMAGERY[k].label }))} />
+          <div className="relative"><Alerts meta={meta} area={area} setArea={setArea} months={months} dispatch={dispatch} /></div>
+          <IconButton label={panelOpen ? 'Hide analytics panel' : 'Show analytics panel'} aria-expanded={panelOpen} aria-controls="analytics"
+            onClick={() => setPanelOpen(!panelOpen)}>
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d={panelOpen ? 'M10 3v10' : 'M10 3v10M12 6.5 11 8l1 1.5'} /></svg>
+          </IconButton>
+          <Menu label="More" icon={<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden fill="currentColor"><circle cx="3" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="13" cy="8" r="1.4" /></svg>}>
+            <a role="menuitem" className={menuItemCls} href="https://github.com/Abhi120320/Hots45/blob/main/CREDITS.md" target="_blank" rel="noreferrer">Credits &amp; licences</a>
+            <a role="menuitem" className={menuItemCls} href="/third-party-licenses.txt" target="_blank" rel="noreferrer">Open-source notices</a>
+            <div className="border-t border-line my-2" />
+            <p className="px-3 py-1 text-xs text-dim max-w-[280px]">
+              Hotspots are VIIRS-equivalent counts; MODIS is scaled by a monthly factor k (R² {meta.r2_overlap.toFixed(3)}). Dates are UTC.
+              Boundaries: geoBoundaries (Runfola et al. 2020), incl. © OpenStreetMap contributors (ODbL), WFP/OCHA, DataMeet, ABS and others.
+              Place search: Photon by Komoot, © OpenStreetMap contributors.
+            </p>
+          </Menu>
+        </div>
+      </header>
 
       <main className="relative flex-1 flex min-h-0">
         <div className="relative flex-1 min-w-0 bg-bg">
@@ -203,94 +249,55 @@ function Main({ meta }: { meta: Meta }) {
             minPct={minPct} setMinPct={setMinPct} grid={grid} periodLabel={periodLabel} start={mStart} end={mEnd}
             scaleMode={scaleMode} setScaleMode={setScaleMode} scale={scale.data?.q} nMonths={mEnd === mStart ? 1 : nMonths}
             area={area} view={view} drawing={drawing} onDrawn={onDrawn} imagery={imagery} setImagery={setImagery}
-            onInteract={onInteract} />
+            onInteract={onInteract} lcGroups={meta.land_cover?.groups} />
 
-          <header className="absolute left-4 top-4 max-w-[420px] pointer-events-none">
-            <h1 className="text-[15px] font-semibold leading-tight">Hots45</h1>
-            <p className="text-[12px] text-dim">Harmonized MODIS/VIIRS burning activity record</p>
-          </header>
-
-          <div className="absolute right-4 top-4 flex flex-wrap justify-end gap-2 items-start max-w-[70%]">
-            <div className="flex border border-line rounded-sm overflow-hidden bg-panel" role="group" aria-label="Map mode">
-              {([['hotspots', 'Hotspots'], ['anomaly', 'Anomaly vs median'], ['heatmap', 'Heatmap']] as [MapMode, string][]).map(([k, label]) => (
-                <button key={k} aria-pressed={mapMode === k} onClick={() => setMapMode(k)}
-                  className={`h-7 px-2.5 text-[12px] ${mapMode === k ? 'bg-accent text-bg font-medium' : 'text-dim hover:text-ink'}`}>
-                  {label}
-                </button>
-              ))}
+          {/* the one place the period is shown on the map: period · total · vs normal, then the area */}
+          <div className="absolute left-1/2 -translate-x-1/2 top-4 pointer-events-none flex flex-col items-center gap-2 max-w-[calc(100%-32px)]" aria-live="polite">
+            <div className="num text-base text-ink h-10 px-4 inline-flex items-center gap-2 rounded-md border border-line bg-panel/95 whitespace-nowrap">
+              <span className="font-semibold">{periodLabel}</span>
+              {overlay && <><span className="text-dim">·</span>{fmt(overlay.total)}<span className="text-dim font-sans text-sm">hotspots</span>{overlay.pct != null && (
+                <span className={Math.abs(overlay.pct) < 5 ? 'text-dim' : overlay.pct > 0 ? 'text-accent' : 'text-below'}>
+                  {Math.abs(overlay.pct) < 5 ? '≈ normal' : `${overlay.pct > 0 ? '+' : '−'}${Math.abs(Math.round(overlay.pct))}% vs normal`}</span>)}</>}
             </div>
-            <div className="flex border border-line rounded-sm overflow-hidden bg-panel" role="group" aria-label="Basemap imagery">
-              {(Object.keys(IMAGERY) as Imagery[]).map(k => (
-                <button key={k} aria-pressed={imagery === k} onClick={() => setImagery(k)}
-                  className={`h-7 px-2.5 text-[12px] ${imagery === k ? 'bg-raised text-ink' : 'text-dim hover:text-ink'}`}>
-                  {IMAGERY[k].label}
-                </button>
-              ))}
-            </div>
-            <div className="relative"><Alerts meta={meta} area={area} setArea={setArea} months={months} dispatch={dispatch} /></div>
-            <button className="h-7 px-2.5 text-[12px] border border-line rounded-sm bg-panel text-dim hover:text-ink"
-              aria-expanded={panelOpen} aria-controls="analytics" onClick={() => setPanelOpen(!panelOpen)}>
-              {panelOpen ? 'Hide panel' : 'Show analytics'}
-            </button>
+            <div className="max-w-full truncate text-xs text-ink h-6 leading-6 px-2 rounded-sm bg-panel/95 border border-line">{areaName}</div>
+            {preview && <div className="text-xs text-accent bg-panel/95 border border-accent/60 rounded-md px-2 py-1 inline-block">Previewing {monthLabel(preview)} · click to select</div>}
           </div>
 
-          {/* period header: updates on every change so the period is never ambiguous */}
-          <div className="absolute left-1/2 -translate-x-1/2 top-14 pointer-events-none text-center" aria-live="polite">
-            <div className={`num text-[15px] font-medium px-3 py-1 rounded-sm border border-line bg-panel/95`}>
-              {periodLabel}
-              {overlay && <> · {fmt(overlay.total)} hotspots{overlay.pct != null && (
-                <span style={{ color: overlay.pct >= 10 ? '#E8743B' : overlay.pct <= -10 ? '#56B4E9' : undefined }}>
-                  {' '}· {Math.abs(overlay.pct) < 5 ? '≈ normal' : `${overlay.pct > 0 ? '+' : ''}${Math.round(overlay.pct)}% vs normal`}</span>)}</>}
-            </div>
-            <div className="text-[10px] text-faint mt-0.5">{areaName}</div>
-            {preview && <div className="mt-1 text-[11px] text-accent bg-panel/95 border border-accent/50 rounded-sm px-2 py-0.5 inline-block">Previewing {monthLabel(preview)} · click to select</div>}
-          </div>
-
-          {(active.loading || active.error) && (
-            <div className="absolute left-1/2 -translate-x-1/2 top-28 text-[11px] bg-panel border border-line rounded-sm px-2 py-1 max-w-[50%]" role="status">
-              {active.error ? <span className="text-accent">{mapMode === 'anomaly' ? 'Anomaly' : 'Map data'}: {active.error}</span>
-                : <span className="text-dim">Loading {grid}° cells…</span>}
-            </div>
-          )}
-          {active.data && active.data.length === 0 && !active.loading && !active.error && (
-            <div className="absolute left-1/2 -translate-x-1/2 top-36 text-[12px] text-dim bg-panel border border-line rounded-sm px-3 py-1.5" role="status">
-              {mapMode === 'anomaly' ? `No cells changed significantly in ${periodLabel}.` : `No hotspots recorded for ${periodLabel}.`}
-            </div>
-          )}
+          {active.error ? statusMsg(`${mapMode === 'anomaly' ? 'Anomaly' : 'Map data'}: ${active.error}`, true)
+            : active.loading ? statusMsg(`Loading ${grid}° cells…`)
+              : active.data && active.data.length === 0 ? statusMsg(mapMode === 'anomaly' ? `No cells changed significantly in ${periodLabel}.` : `No fires in this area for ${periodLabel}.`)
+                : null}
         </div>
 
         {panelOpen && (
           <aside id="analytics" aria-label="Analytics for the selected area"
             className="relative shrink-0 border-l border-line bg-bg overflow-y-auto" style={{ width: panelW }}>
             <div role="separator" aria-orientation="vertical" aria-label="Resize panel" tabIndex={0}
-              aria-valuenow={panelW} aria-valuemin={340} aria-valuemax={panelMax()}
+              aria-valuenow={panelW} aria-valuemin={PANEL_MIN} aria-valuemax={panelMax()}
               onPointerDown={startResize}
-              onKeyDown={e => { const d = e.key === 'ArrowLeft' ? 24 : e.key === 'ArrowRight' ? -24 : 0; if (d) { e.preventDefault(); setPanelW(w => { const v = Math.min(panelMax(), Math.max(340, w + d)); try { localStorage.setItem(PANEL_KEY, String(v)) } catch { /* ignore */ } return v }) } }}
+              onKeyDown={e => { const d = e.key === 'ArrowLeft' ? 24 : e.key === 'ArrowRight' ? -24 : 0; if (d) { e.preventDefault(); setPanelW(w => { const v = Math.min(panelMax(), Math.max(PANEL_MIN, w + d)); try { localStorage.setItem(PANEL_KEY, String(v)) } catch { /* ignore */ } return v }) } }}
               className="sticky top-0 float-left -ml-px h-full w-2 cursor-col-resize hover:bg-accent/40 focus:bg-accent/40 z-10" style={{ marginBottom: '-100%' }} />
             <Panel meta={meta} area={area} setArea={setArea} start={start} end={end} view={view} periodLabel={periodLabel} onPickMonth={pickMonth} expand={expand}
-              drawing={drawing} setDrawing={setDrawing} onSeries={setSpark} />
+              drawing={drawing} setDrawing={setDrawing} onSeries={setSpark} fireType={fireType} setFireType={setFireType} metric={metric} setMetric={setMetric} />
           </aside>
         )}
       </main>
 
-      <TimelineChart meta={meta} months={months} tl={tl} dispatch={dispatch} lastComplete={lastCompleteIdx} rows={spark}
-        area={ap} areaKey={areaKey} areaName={areaName} onPreview={setPreview}
+      <TimelineChart meta={meta} months={months} tl={tl} dispatch={dispatch} lastComplete={lastCompleteIdx} rows={tlRows}
+        area={tlArea} areaKey={`${areaKey}|${fireType}`} areaName={areaName} onPreview={setPreview} fireType={fireType} setFireType={setFireType} metric={metric} setMetric={setMetric}
         expandHref={expand('timeline').href} onExpand={expand('timeline').onClick} />
 
       {route.chart && (
         <ChartView chart={route.chart} meta={meta} months={months} tl={tl} dispatch={dispatch} lastComplete={lastCompleteIdx}
-          area={area} setArea={setArea} areaName={areaName} go={go} onBack={back} onPreview={() => {}} />
+          area={area} setArea={setArea} areaName={areaName} go={go} onBack={back} onPreview={() => {}} fireType={fireType} setFireType={setFireType} metric={metric} setMetric={setMetric} />
       )}
 
-      <footer className="border-t border-line bg-bg px-4 py-1 text-[10px] text-faint flex flex-wrap gap-x-3">
-        <span>Source: NASA FIRMS MCD14ML (MODIS), VNP14IMGML (VIIRS S-NPP)</span>
-        <span>{IMAGERY[imagery].credit}</span>
-        <span>Boundaries: geoBoundaries (Runfola et al. 2020), incl. © OpenStreetMap contributors (ODbL), WFP/OCHA, DataMeet, ABS and others</span>
-        <span>Place search: Photon by Komoot, © OpenStreetMap contributors</span>
-        <a className="underline hover:text-dim" href="https://github.com/Abhi120320/Hots45/blob/main/CREDITS.md" target="_blank" rel="noreferrer">Credits &amp; licences</a>
-        <a className="underline hover:text-dim" href="/third-party-licenses.txt" target="_blank" rel="noreferrer">Open-source notices</a>
-        <span>Hotspots are VIIRS-equivalent counts; MODIS scaled by monthly factor k (R² {meta.r2_overlap.toFixed(3)})</span>
-        <span className="num">Dates UTC</span>
+      {/* required attributions, one line; the rest is under ⋯ More */}
+      <footer className="h-8 shrink-0 border-t border-line bg-bg px-4 flex items-center gap-4 text-xs text-dim min-w-0">
+        <span className="truncate" title={`${IMAGERY[imagery].credit} · NASA FIRMS MCD14ML, VNP14IMGML${meta.land_cover ? ' · NASA MODIS MCD12Q1' : ''} · geoBoundaries · © OpenStreetMap contributors`}>
+          {IMAGERY[imagery].credit} · Data: NASA FIRMS MCD14ML, VNP14IMGML{meta.land_cover ? ', MCD12Q1' : ''} · Boundaries: geoBoundaries, © OpenStreetMap contributors
+        </span>
+        <a className="ml-auto shrink-0 underline hover:text-ink" href="https://github.com/Abhi120320/Hots45/blob/main/CREDITS.md" target="_blank" rel="noreferrer">Credits</a>
       </footer>
     </div>
   )

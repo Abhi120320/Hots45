@@ -6,3 +6,6 @@ pytest
 httpx
 shapely==2.2.0
 duckdb==2.0.0
+tifffile==2026.10.15
+imagecodecs==2026.10.10
+python-dotenv

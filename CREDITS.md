@@ -12,10 +12,15 @@ Hots45 is not endorsed by NASA, Esri, Komoot or any data provider. No NASA insig
 |---|---|---|---|---|
 | NASA FIRMS: MODIS Collection 6.1 (MCD14ML) and VIIRS S-NPP 375 m (VNP14IMGML) active fire archives | All hotspot counts | https://firms.modaps.eosdis.nasa.gov/ | NASA Earth science data: open, no restrictions ([EOSDIS data use policy](https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance)) | Requested, not required |
 | NASA FIRMS NRT (same products, near real time) | Recent months marked provisional | https://firms.modaps.eosdis.nasa.gov/api/ | As above; MAP_KEY required | Requested, not required |
+| NASA MODIS Land Cover Type MCD12Q1 Collection 6.1 (Friedl & Sulla-Menashe 2022), extracted with AppEEARS | Land-cover label per hotspot, "What is burning", Fire type map | https://doi.org/10.5067/MODIS/MCD12Q1.061 · https://appeears.earthdatacloud.nasa.gov/ | NASA Earth science data: open, no restrictions (EOSDIS data use policy) | Citation requested |
 | geoBoundaries gbOpen (Runfola et al. 2020) | Country, state and district outlines, search, district rankings | https://www.geoboundaries.org/ | Per layer, see [Boundary layers](#boundary-layers): ODbL, CC BY, CC BY-SA, CC BY 3.0 IGO, public domain and others | **Required** (most layers) |
 
 Requested NASA acknowledgement: *We acknowledge the use of data and imagery from NASA's Fire Information for Resource
 Management System (FIRMS) (https://earthdata.nasa.gov/firms), part of NASA's Earth Science Data and Information System (ESDIS).*
+
+MCD12Q1 citation: *Friedl, M., Sulla-Menashe, D. (2022). MODIS/Terra+Aqua Land Cover Type Yearly L3 Global 500m SIN Grid V061.
+NASA EOSDIS Land Processes Distributed Active Archive Center. https://doi.org/10.5067/MODIS/MCD12Q1.061*. Extracted with
+AppEEARS Team (2026), Application for Extracting and Exploring Analysis Ready Samples (AppEEARS), NASA EOSDIS LP DAAC, USGS EROS Center.
 
 geoBoundaries citation: *Runfola, D. et al. (2020) geoBoundaries: A global database of political administrative
 boundaries. PLoS ONE 15(4): e0231866. https://doi.org/10.1371/journal.pone.0231866*
@@ -80,6 +85,8 @@ used under MIT). Their licences require keeping copyright notices with the shipp
 | PyArrow | 26.0.1 | https://arrow.apache.org/ | Apache-2.0 |
 | Shapely | 2.2.0 | https://shapely.readthedocs.io/ | BSD-3-Clause |
 | Matplotlib (data_prep charts only) | 3.11 | https://matplotlib.org/ | Matplotlib License (PSF-based) |
+| tifffile, imagecodecs (data_prep land cover only) | 2026.10.15 / 2026.10.10 | https://github.com/cgohlke/tifffile · https://github.com/cgohlke/imagecodecs | BSD-3-Clause |
+| python-dotenv (data_prep only) | 1.2 | https://github.com/theskumar/python-dotenv | BSD-3-Clause |
 | pytest, HTTPX (tests only) | 9.2 / 0.28 | https://pytest.org/ · https://www.python-httpx.org/ | MIT · BSD-3-Clause |
 
 ## Boundary layers
