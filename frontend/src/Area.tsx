@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { url, regionLabel, type Area, type BBox, type Meta, type Place, type Region } from './api'
+import { Disclosure, buttonCls } from './ui'
 
 export const PRESETS: { name: string; bbox: BBox }[] = [
   { name: 'India', bbox: [68, 6.5, 97.5, 35.5] },
@@ -108,7 +109,7 @@ export default function AreaControls(p: Props) {
   }
 
   const sel = p.area && 'region' in p.area ? p.area.region : null
-  const chipCls = (on: boolean) => `h-7 px-2.5 text-[12px] border rounded-sm ${on ? 'border-accent text-ink bg-accent/15' : 'border-line bg-raised text-dim hover:text-ink hover:border-dim'}`
+  const chipCls = (on: boolean) => (on ? buttonCls('secondary').replace('border-line', 'border-accent').replace('bg-panel', 'bg-accent/15') : buttonCls('secondary'))
   const isPreset = (b: BBox) => !!p.area && 'bbox' in p.area && p.area.bbox.join() === b.join()
 
   return (
@@ -121,13 +122,13 @@ export default function AreaControls(p: Props) {
           aria-activedescendant={open && options[active] ? `${listId}-o${active}` : undefined}
           placeholder={hasBoundaries ? 'Search country, state, district or place…' : 'Search needs boundaries (run build_boundaries.py)'}
           disabled={!hasBoundaries}
-          className="w-full h-8 px-2.5 bg-bg border border-line rounded-sm text-[13px] text-ink placeholder:text-faint focus:border-dim"
+          className="w-full h-8 px-3 bg-bg border border-line rounded-md text-sm text-ink placeholder:text-dim focus:border-dim"
           value={q} onChange={e => { setQ(e.target.value); setOpen(true) }} onFocus={() => setOpen(true)}
           onBlur={() => setTimeout(() => setOpen(false), 150)} onKeyDown={onKey} />
         {open && q.trim() && (
           <ul id={listId} role="listbox" aria-label="Search results"
-            className="absolute z-20 left-0 right-0 mt-1 bg-panel border border-line rounded-sm max-h-[320px] overflow-y-auto py-1">
-            {options.length === 0 && placeState !== 'loading' && <li className="px-2.5 py-1.5 text-[12px] text-faint">No matches</li>}
+            className="absolute z-20 left-0 right-0 mt-1 bg-panel border border-line rounded-md max-h-[320px] overflow-y-auto py-1">
+            {options.length === 0 && placeState !== 'loading' && <li className="px-3 py-2 text-xs text-dim">No matches</li>}
             {options.map((o, i) => {
               const first = o.type === 'place' && (i === 0 || options[i - 1].type === 'unit')
               const title = o.type === 'unit' ? o.unit.name : o.place.name
@@ -137,36 +138,36 @@ export default function AreaControls(p: Props) {
                   : [o.place.state, o.place.country].filter(Boolean).join(', ') + ' · outside data'
               return (
                 <li key={i} role="presentation">
-                  {first && <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide text-faint">Places</div>}
+                  {first && <div className="px-3 pt-2 pb-1 text-xs font-semibold text-dim">Places</div>}
                   <div id={`${listId}-o${i}`} role="option" aria-selected={i === active}
                     onMouseDown={e => { e.preventDefault(); pick(o) }} onMouseEnter={() => setActive(i)}
-                    className={`px-2.5 py-1.5 cursor-pointer text-[12px] ${i === active ? 'bg-raised' : ''} ${o.type === 'place' && !o.place.in_coverage ? 'opacity-60' : ''}`}>
+                    className={`px-3 py-2 cursor-pointer text-sm ${i === active ? 'bg-ink/5' : ''}`}>
                     <span className="text-ink">{title}</span>
-                    <span className="text-faint"> · {kind}{parent ? ` · ${parent}` : ''}</span>
+                    <span className="text-dim"> · {kind}{parent ? ` · ${parent}` : ''}</span>
                   </div>
                 </li>
               )
             })}
-            {placeState === 'loading' && <li className="px-2.5 py-1 text-[11px] text-faint">Searching places…</li>}
-            {placeState === 'error' && <li className="px-2.5 py-1 text-[11px] text-faint">Place search unavailable (offline?); states and districts still work.</li>}
+            {placeState === 'loading' && <li className="px-3 py-1 text-xs text-dim">Searching places…</li>}
+            {placeState === 'error' && <li className="px-3 py-1 text-xs text-dim">Place search unavailable (offline?); states and districts still work.</li>}
           </ul>
         )}
       </div>
 
-      {msg && <p role="alert" className="text-[12px] text-accent border border-accent/40 rounded-sm px-2 py-1.5">{msg}</p>}
+      {msg && <p role="alert" className="text-xs text-accent border border-accent/40 rounded-sm px-2 py-2">{msg}</p>}
 
       {/* selected area chip */}
       {sel && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 h-7 pl-2.5 pr-1 rounded-sm border border-accent bg-accent/15 text-[12px] text-ink">
-            {regionLabel(sel)} <span className="text-faint">· {sel.kind}</span>
-            <button aria-label={`Remove ${regionLabel(sel)}`} className="w-5 h-5 rounded-sm hover:bg-raised text-dim"
+          <span className="inline-flex items-center gap-2 h-8 pl-3 pr-1 rounded-md border border-accent bg-accent/15 text-sm text-ink">
+            {regionLabel(sel)} <span className="text-dim">· {sel.kind}</span>
+            <button aria-label={`Remove ${regionLabel(sel)}`} className="w-5 h-5 rounded-sm hover:bg-ink/5 text-dim"
               onClick={() => { p.setArea(null); setFromPlace(null) }}>✕</button>
           </span>
           {fromPlace && (sel.level === 3
-            ? <button className="text-[11px] text-dim underline underline-offset-2 hover:text-ink"
+            ? <button className={buttonCls('ghost')}
                 onClick={() => fromPlace.district_id && choose(fromPlace.district_id, fromPlace)}>Use the district instead</button>
-            : <button className="text-[11px] text-dim underline underline-offset-2 hover:text-ink"
+            : <button className={buttonCls('ghost')}
                 onClick={() => choose(`c${fromPlace.lon},${fromPlace.lat},${RADIUS_KM}`, fromPlace)}>
                 Use {RADIUS_KM} km around {fromPlace.name} instead
               </button>)}
@@ -174,7 +175,7 @@ export default function AreaControls(p: Props) {
       )}
 
       {/* quick chips, recent, draw */}
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-2">
         {PRESETS.map(pr => (
           <button key={pr.name} className={chipCls(isPreset(pr.bbox))} aria-pressed={isPreset(pr.bbox)}
             onClick={() => { p.setArea({ bbox: pr.bbox }); setFromPlace(null) }}>{pr.name}</button>
@@ -185,10 +186,10 @@ export default function AreaControls(p: Props) {
         {p.area && !sel && <button className={chipCls(false)} onClick={() => p.setArea(null)}>Clear</button>}
       </div>
       {recent.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] text-faint">Recent</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-dim w-12">Recent</span>
           {recent.map(r => (
-            <button key={r.id} className="h-6 px-2 text-[11px] border border-line rounded-sm text-dim hover:text-ink hover:border-dim"
+            <button key={r.id} className={buttonCls('secondary')}
               onClick={() => choose(r.id)} title={`${regionLabel(r)} · ${r.kind}`}>{r.name}</button>
           ))}
         </div>
@@ -223,23 +224,22 @@ function Coordinates({ area, setArea }: { area: Area; setArea: (a: Area) => void
   const error = bboxError(v)
   const valid = error === null
   return (
-    <details className="text-[11px] text-dim">
-      <summary className="cursor-pointer select-none hover:text-ink">Enter coordinates</summary>
-      <form className="grid grid-cols-[repeat(4,1fr)_auto] gap-1.5 items-end mt-1.5"
+    <Disclosure summary="Enter coordinates">
+      <form className="grid grid-cols-[repeat(4,1fr)_auto] gap-2 items-end"
         onSubmit={e => { e.preventDefault(); if (valid) setArea({ bbox: nums as BBox }) }}>
         {['West °E', 'South °N', 'East °E', 'North °N'].map((l, i) => (
-          <label key={l} className="text-[10px] text-faint">
+          <label key={l} className="text-xs text-dim">
             {l}
-            <input className="num mt-0.5 w-full h-7 px-1.5 bg-bg border border-line rounded-sm text-[12px] text-ink"
+            <input className="num mt-1 w-full h-8 px-2 bg-bg border border-line rounded-md text-sm text-ink"
               inputMode="decimal" aria-describedby="coord-error" aria-invalid={!!error && v.some(x => x.trim())} value={v[i]} onChange={e => setV(v.map((x, j) => (j === i ? e.target.value : x)))} />
           </label>
         ))}
         <button type="submit" disabled={!valid} aria-describedby="coord-error"
-          className="h-7 px-2.5 text-[12px] border border-line rounded-sm bg-raised hover:border-dim disabled:opacity-40">Apply</button>
-        <p id="coord-error" role="status" className="col-span-5 text-[11px] text-accent min-h-[1em]">
+          className={buttonCls('secondary')}>Apply</button>
+        <p id="coord-error" role="status" className="col-span-5 text-xs text-accent min-h-[1em]">
           {error && v.some(x => x.trim()) ? error : ''}
         </p>
       </form>
-    </details>
+    </Disclosure>
   )
 }

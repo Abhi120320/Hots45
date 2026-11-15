@@ -1,3 +1,16 @@
+/** Design tokens for canvas/WebGL code (ECharts, deck.gl), which cannot read CSS variables. Mirrors index.css @theme. */
+export const T = { bg: '#0B0D10', panel: '#14171C', line: '#2B313A', ink: '#E6E8EB', dim: '#A3ACB7', accent: '#E8743B', sans: 'IBM Plex Sans', mono: 'IBM Plex Mono' }
+/** chart text size: 12px, 14px in the expanded (large) view — the same in every chart */
+export const FS = (large?: boolean) => (large ? 14 : 12)
+/** compact numbers for axes and tight labels: 850, 1.2k, 12.4k, 124k, 1.2M */
+export const abbr = (v: number) => {
+  const a = Math.abs(v)
+  if (a < 1000) return String(Math.round(v))
+  if (a < 1e5) return `${+(v / 1000).toFixed(1)}k`
+  if (a < 999_500) return `${Math.round(v / 1000)}k`
+  return `${+(v / 1e6).toFixed(1)}M`
+}
+
 // Cividis (colour-blind-safe sequential). We use its upper 70% on the map so low counts stay visible on dark imagery.
 export const CIVIDIS = ['#00224e', '#123570', '#3b496c', '#575d6d', '#707173', '#8a8779', '#a69d75', '#c4b56c', '#e4cf5b', '#fee838']
 export const MAP_RAMP = CIVIDIS.slice(3)
@@ -18,7 +31,7 @@ export function rampColor(t: number, ramp = MAP_RAMP): [number, number, number] 
 export const logNorm = (v: number, max: number) => (max > 0 ? Math.log1p(v) / Math.log1p(max) : 0)
 
 export const SERIES = { harmonized: '#E6E8EB', modis: '#56B4E9', viirs: '#009E73', median: '#9AA3AE', anomaly: '#E8743B' }
-export const ACCENT = '#E8743B'
+export const ACCENT = T.accent
 export const BELOW = '#56B4E9'
 
 export const fmt = (v: number | null | undefined, d = 0) =>
@@ -92,3 +105,9 @@ export function classifyFixed(values: number[], q: Record<string, number>, minPc
   // heights are linear up to 2x the 99.5th percentile, then capped, so one extreme cell can't flatten the rest
   return { threshold, breaks, max: qv(0.995) * 2, shown: nz.filter(v => v >= threshold).length, total: nz.length, classOf, colorIdx }
 }
+
+// Okabe-Ito (colour-blind-safe categorical), one colour per land-cover group key from meta.land_cover.groups
+export const LC_COLORS: Record<string, string> = {
+  forest: '#009E73', shrub: '#E69F00', grass: '#F0E442', wetland: '#56B4E9', crop: '#D55E00', other: '#BBBBBB',
+}
+export const lcColor = (key: string) => LC_COLORS[key] ?? '#BBBBBB'

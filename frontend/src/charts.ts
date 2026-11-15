@@ -1,21 +1,21 @@
 // ECharts options shared by the side panel (compact) and the expanded chart view (large).
 import type { Meta, SeriesRow } from './api'
-import { SERIES, fmt, reducedMotion } from './colors'
+import { FS, SERIES, T, abbr, fmt, reducedMotion } from './colors'
 
 const STAR = 'path://M50 0 61 35 98 35 68 57 79 91 50 70 21 91 32 57 2 35 39 35Z'
 
 function theme(large: boolean) {
-  const fs = large ? 14 : 10
+  const fs = FS(large)
   return {
     fs,
-    AXIS: { axisLine: { lineStyle: { color: '#262B33' } }, axisTick: { show: false }, axisLabel: { color: '#9AA3AE', fontSize: fs, fontFamily: 'IBM Plex Mono' }, splitLine: { lineStyle: { color: '#1B1F26' } } },
-    TIP: { backgroundColor: '#14171C', borderColor: '#262B33', textStyle: { color: '#E6E8EB', fontSize: large ? 14 : 11, fontFamily: 'IBM Plex Mono' }, extraCssText: 'border-radius:4px;box-shadow:none' },
-    BASE: { backgroundColor: 'transparent', animation: !reducedMotion(), animationDuration: 250, textStyle: { fontFamily: 'IBM Plex Sans', color: '#9AA3AE' } },
-    LEGEND: { top: 0, left: 0, itemWidth: large ? 22 : 14, itemHeight: large ? 3 : 2, icon: 'rect', textStyle: { color: '#9AA3AE', fontSize: large ? 14 : 10 } },
+    AXIS: { axisLine: { lineStyle: { color: T.line } }, axisTick: { show: false }, axisLabel: { color: T.dim, fontSize: fs, fontFamily: T.mono, hideOverlap: true }, splitLine: { lineStyle: { color: T.line } } },
+    TIP: { backgroundColor: T.panel, borderColor: T.line, textStyle: { color: T.ink, fontSize: fs, fontFamily: T.mono }, padding: [8, 12], extraCssText: 'border-radius:6px;box-shadow:none' },
+    BASE: { backgroundColor: 'transparent', animation: !reducedMotion(), animationDuration: 250, textStyle: { fontFamily: T.sans, color: T.dim } },
+    LEGEND: { top: 0, left: 0, itemWidth: large ? 22 : 14, itemHeight: large ? 3 : 2, icon: 'rect', textStyle: { color: T.dim, fontSize: fs } },
     grid: large ? { left: 80, right: 32, top: 48, bottom: 80 } : { left: 52, right: 8, top: 30, bottom: 24 },
     // large: zoom/pan with the wheel and an overview slider; crosshair tooltips
-    zoom: large ? [{ type: 'inside' }, { type: 'slider', height: 22, bottom: 16, borderColor: '#262B33', fillerColor: 'rgba(232,116,59,0.15)', handleStyle: { color: '#E8743B' }, textStyle: { color: '#8A939E', fontSize: 12 } }] : undefined,
-    pointer: large ? { type: 'cross', label: { backgroundColor: '#262B33', fontFamily: 'IBM Plex Mono' } } : undefined,
+    zoom: large ? [{ type: 'inside' }, { type: 'slider', height: 22, bottom: 16, borderColor: T.line, fillerColor: 'rgba(232,116,59,0.15)', handleStyle: { color: T.accent }, textStyle: { color: T.dim, fontSize: fs } }] : undefined,
+    pointer: large ? { type: 'cross', label: { backgroundColor: T.line, fontFamily: T.mono } } : undefined,
   }
 }
 
@@ -36,7 +36,7 @@ export function lineOption(rows: SeriesRow[], large = false) {
     tooltip: { ...t.TIP, trigger: 'axis', axisPointer: t.pointer, valueFormatter: (v: number) => fmt(v) },
     dataZoom: t.zoom,
     xAxis: { type: 'category', data: x, ...t.AXIS, splitLine: { show: false }, axisLabel: { ...t.AXIS.axisLabel, formatter: yearTick(rows, large), interval: 0 } },
-    yAxis: { type: 'value', ...t.AXIS, name: large ? 'Hotspots per month (VIIRS-equivalent)' : undefined, nameTextStyle: { fontSize: t.fs, color: '#8A939E', align: 'left' } },
+    yAxis: { type: 'value', ...t.AXIS, axisLabel: { ...t.AXIS.axisLabel, formatter: abbr }, name: large ? 'Hotspots per month (VIIRS-equivalent)' : undefined, nameTextStyle: { fontSize: t.fs, color: T.dim, align: 'left' } },
     series: [
       { name: 'band-lo', type: 'line', data: lo, stack: 'band', symbol: 'none', lineStyle: { opacity: 0 }, tooltip: { show: false } },
       { name: 'Mean ± 1σ', type: 'line', data: rows.map((r, i) => r.mean + r.std - lo[i]), stack: 'band', symbol: 'none', lineStyle: { opacity: 0 }, areaStyle: { color: 'rgba(154,163,174,0.16)' }, itemStyle: { color: 'rgba(154,163,174,0.4)' } },
@@ -45,7 +45,7 @@ export function lineOption(rows: SeriesRow[], large = false) {
       {
         name: 'Anomaly', type: 'scatter', symbol: STAR, symbolSize: large ? 14 : 10, itemStyle: { color: SERIES.anomaly },
         data: rows.map(r => (r.flag ? r.hotspots : null)),
-        label: large ? { show: true, position: 'top', color: '#E8743B', fontSize: 11, formatter: (p: any) => (p.value == null ? '' : rows[p.dataIndex].month) } : undefined,
+        label: large ? { show: true, position: 'top', color: T.accent, fontSize: t.fs, formatter: (p: any) => (p.value == null ? '' : rows[p.dataIndex].month) } : undefined,
       },
     ],
   }
@@ -85,12 +85,12 @@ export function beforeAfterOption(rows: SeriesRow[], meta: Meta, large = false, 
   const h0 = Math.round(usable * 0.3), h1 = Math.round(usable * 0.27), h2 = usable - h0 - h1 - 2 * gap - (large ? 30 : 22)
   const g = [{ top, height: h0 }, { top: top + h0 + gap - 14, height: h1 }, { top: top + h0 + h1 + 2 * gap + (large ? 16 : 10), height: h2 }]
   const grid = g.map((x, i) => ({ ...x, left: i === 2 ? (large ? '30%' : L + 40) : L, right: i === 2 ? (large ? '30%' : R + 70) : R }))
-  const title = (txt: string, i: number) => ({ text: txt, left: L, top: g[i].top - (large ? 22 : 16), textStyle: { fontSize: fs, color: '#9AA3AE', fontWeight: 500 } })
+  const title = (txt: string, i: number) => ({ text: txt, left: L, top: g[i].top - (large ? 22 : 16), textStyle: { fontSize: fs, color: T.dim, fontWeight: 600 } })
   const xAxis = (i: number) => ({ type: 'category', gridIndex: i, data: xs, ...t.AXIS, splitLine: { show: false },
     axisLabel: { ...t.AXIS.axisLabel, show: i === 1, interval: yearly ? (large ? 1 : 3) : 'auto', formatter: (v: string) => (yearly ? v : v.endsWith('-01') ? v.slice(0, 4) : '') } })
-  const yAxis = (i: number) => ({ type: 'value', gridIndex: i, ...t.AXIS, splitNumber: 2, axisLabel: { ...t.AXIS.axisLabel, formatter: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)) } })
-  const marker = (label: boolean) => ({ silent: true, symbol: 'none', lineStyle: { color: '#E6E8EB', type: 'dotted', width: 1 },
-    label: { show: label, formatter: '← MODIS (converted)  |  VIIRS →', color: '#9AA3AE', fontSize: large ? 13 : 9, position: 'insideStartTop', distance: 4 }, data: [{ xAxis: switchAt }] })
+  const yAxis = (i: number) => ({ type: 'value', gridIndex: i, ...t.AXIS, splitNumber: 2, axisLabel: { ...t.AXIS.axisLabel, formatter: abbr } })
+  const marker = (label: boolean) => ({ silent: true, symbol: 'none', lineStyle: { color: T.ink, type: 'dotted', width: 1 },
+    label: { show: label, formatter: '← MODIS (converted)  |  VIIRS →', color: T.dim, fontSize: fs, position: 'insideStartTop', distance: 4 }, data: [{ xAxis: switchAt }] })
   return {
     ...t.BASE,
     title: [title('Before: raw sensor counts (note the jump when VIIRS starts)', 0), title('After: harmonized, VIIRS-equivalent', 1),
@@ -100,15 +100,15 @@ export function beforeAfterOption(rows: SeriesRow[], meta: Meta, large = false, 
     axisPointer: { link: [{ xAxisIndex: [0, 1] }] }, // shared x-axis between Before and After
     dataZoom: large ? [{ type: 'inside', xAxisIndex: [0, 1] }] : undefined,
     grid,
-    xAxis: [xAxis(0), xAxis(1), { type: 'value', gridIndex: 2, ...t.AXIS, name: 'MODIS × k', nameLocation: 'middle', nameGap: large ? 28 : 20, nameTextStyle: { fontSize: fs - 1 }, axisLabel: { ...t.AXIS.axisLabel, formatter: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)) } }],
-    yAxis: [yAxis(0), yAxis(1), { ...yAxis(2), name: 'VIIRS', nameLocation: 'middle', nameGap: large ? 46 : 32, nameTextStyle: { fontSize: fs - 1 } }],
+    xAxis: [xAxis(0), xAxis(1), { type: 'value', gridIndex: 2, ...t.AXIS, name: 'MODIS × k', nameLocation: 'middle', nameGap: large ? 28 : 20, nameTextStyle: { fontSize: fs }, axisLabel: { ...t.AXIS.axisLabel, formatter: abbr } }],
+    yAxis: [yAxis(0), yAxis(1), { ...yAxis(2), name: 'VIIRS', nameLocation: 'middle', nameGap: large ? 46 : 32, nameTextStyle: { fontSize: fs } }],
     series: [
-      { name: 'MODIS raw', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: pts.map(q => q.modis), symbol: 'none', lineStyle: { color: '#8A939E', width: 1.5 }, itemStyle: { color: '#8A939E' }, markLine: marker(false) },
+      { name: 'MODIS raw', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: pts.map(q => q.modis), symbol: 'none', lineStyle: { color: T.dim, width: 1.5 }, itemStyle: { color: T.dim }, markLine: marker(false) },
       { name: 'VIIRS raw', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: pts.map(q => q.viirs), symbol: 'none', lineStyle: { color: '#3BB273', width: 1.5 }, itemStyle: { color: '#3BB273' } },
       { name: 'Harmonized', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: pts.map(q => q.h), symbol: 'none', lineStyle: { color: '#F2F3F5', width: large ? 3 : 2.5 }, itemStyle: { color: '#F2F3F5' }, markLine: marker(true), z: 3 },
-      { name: 'MODIS × k', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: pts.map(q => q.k), symbol: 'none', lineStyle: { color: '#E8743B', width: 1.5, type: 'dashed' }, itemStyle: { color: '#E8743B' }, z: 2 },
+      { name: 'MODIS × k', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: pts.map(q => q.k), symbol: 'none', lineStyle: { color: T.accent, width: 1.5, type: 'dashed' }, itemStyle: { color: T.accent }, z: 2 },
       { name: 'Validation', type: 'scatter', xAxisIndex: 2, yAxisIndex: 2, data: val, symbolSize: large ? 6 : 4, itemStyle: { color: 'rgba(232,116,59,0.7)' }, tooltip: { trigger: 'item', formatter: (q: any) => `MODIS × k ${fmt(q.value[0])}<br/>VIIRS ${fmt(q.value[1])}` },
-        markLine: { silent: true, symbol: 'none', lineStyle: { color: '#9AA3AE', type: 'dashed' }, label: { formatter: '1:1', color: '#9AA3AE', fontSize: fs - 2 }, data: [[{ coord: [0, 0] }, { coord: [vmax, vmax] }]] } },
+        markLine: { silent: true, symbol: 'none', lineStyle: { color: T.dim, type: 'dashed' }, label: { formatter: '1:1', color: T.dim, fontSize: fs }, data: [[{ coord: [0, 0] }, { coord: [vmax, vmax] }]] } },
     ],
   }
 }
@@ -148,7 +148,7 @@ export function svgToPng(svg: SVGSVGElement, k: number, name: string): Promise<v
       try {
         const c = Object.assign(document.createElement('canvas'), { width: vb.width * k, height: vb.height * k })
         const ctx = c.getContext('2d')!
-        ctx.fillStyle = '#14171C'
+        ctx.fillStyle = T.panel
         ctx.fillRect(0, 0, c.width, c.height)
         ctx.drawImage(img, 0, 0)
         Object.assign(document.createElement('a'), { href: c.toDataURL('image/png'), download: name }).click()

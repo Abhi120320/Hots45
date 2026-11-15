@@ -1,25 +1,32 @@
 @import "tailwindcss";
 
+/* Design tokens: the ONLY colours, sizes and radii the UI uses (data ramps live in colors.ts).
+   Spacing: Tailwind's 4px unit, used only in 8px-grid steps 1,2,3,4,6,8,12 (4/8/12/16/24/32/48px). */
 @theme {
-  --color-bg: #0B0D10;
-  --color-panel: #14171C;
-  --color-raised: #1B1F26;
-  --color-line: #262B33;
-  --color-ink: #E6E8EB;
-  --color-dim: #9AA3AE;
-  --color-faint: #8A939E;
-  --color-accent: #E8743B;
-  --color-below: #56B4E9;
+  --color-bg: #0B0D10;        /* background */
+  --color-panel: #14171C;     /* panels, bars, popovers */
+  --color-line: #2B313A;      /* 1px borders, dividers, gridlines */
+  --color-ink: #E6E8EB;       /* text-primary (14.6:1 on panel) */
+  --color-dim: #A3ACB7;       /* text-secondary (7.9:1 on panel) */
+  --color-accent: #E8743B;    /* the one accent: fire orange (6.0:1 on panel) */
+  --color-below: #56B4E9;     /* data only: "below normal" side of the diverging ramp */
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
-  --radius-sm: 4px;
-  --radius-md: 6px;
+  --text-xs: 12px;   --text-xs--line-height: 16px;
+  --text-sm: 14px;   --text-sm--line-height: 20px;
+  --text-base: 16px; --text-base--line-height: 24px;
+  --text-lg: 20px;   --text-lg--line-height: 28px;
+  --text-title: 28px; --text-title--line-height: 36px;
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --radius-sm: 4px;  /* small chips, swatches */
+  --radius-md: 6px;  /* panels, buttons, inputs */
 }
 
 @layer base {
   html, body, #root { height: 100%; }
-  body { margin: 0; background: var(--color-bg); color: var(--color-ink); font-family: var(--font-sans); font-size: 13px; }
-  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-ink); font-family: var(--font-sans); font-size: 14px; line-height: 20px; }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
   button, input, select { font: inherit; color: inherit; }
 }
 .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -33,7 +40,11 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 16px; border-radius
 .dual input[type="range"] { pointer-events: none; position: absolute; inset: 0; width: 100%; }
 .dual input[type="range"]::-webkit-slider-runnable-track { background: transparent; }
 
-.maplibregl-ctrl-scale { background: rgba(11,13,16,.8); color: var(--color-dim); border-color: var(--color-dim); font-family: var(--font-mono); font-size: 10px; }
+.maplibregl-ctrl-scale { background: rgba(20,23,28,.9); color: var(--color-dim); border-color: var(--color-dim); font-family: var(--font-mono); font-size: 12px; }
 .maplibregl-ctrl-attrib { display: none; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* loading skeleton: a calm pulse, off for reduced motion (rule above) */
+@keyframes skeleton { 50% { opacity: .45; } }
+.skeleton { background: var(--color-line); border-radius: var(--radius-sm); animation: skeleton 1.6s ease-in-out infinite; }

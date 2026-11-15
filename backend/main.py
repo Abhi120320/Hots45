@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "data_prep"))
 from fire_harmonize import all_months, anomalies  # noqa: E402  same analytics as the offline pipeline
 from backend.admin import Admin, circle, geocode  # noqa: E402
 from backend import alerts as alerts_engine  # noqa: E402
+from backend import outlook as outlook_model  # noqa: E402
 
 DATA = Path(os.environ.get("APP_DATA", ROOT / "backend" / "app_data"))
 # Serverless (Vercel): DATA_URL is a base URL holding flat files (meta.json, cells*.parquet, admin*.parquet,
@@ -89,6 +90,22 @@ db.execute("CREATE TABLE tile_k AS SELECT * FROM _tiles")
 db.execute("CREATE TABLE cal_k AS SELECT * FROM _cal")
 K_GLOBAL = float(META.get("factor_global", 1.0))
 
+
+def _factor_tables(m, name):
+    """k per tile x calendar month and per calendar month, from a meta factor block, as DuckDB tables <name>_tile/_cal."""
+    t = pd.DataFrame([(int(float(key.split(",")[0]) // TILE_DEG), int(float(key.split(",")[1]) // TILE_DEG), int(c), k)
+                      for key, v in m.get("factor_by_tile", {}).items() for c, k in v["k"].items()], columns=["tx", "ty", "cal", "k"])
+    c = pd.DataFrame([(int(cc), k) for cc, k in m.get("factor_by_month", {}).items()], columns=["cal", "k"])
+    db.register(f"_{name}_t", t.astype({"tx": "int32", "ty": "int32", "cal": "int32", "k": "float64"}))
+    db.register(f"_{name}_c", c.astype({"cal": "int32", "k": "float64"}))
+    db.execute(f"CREATE TABLE {name}_tile AS SELECT * FROM _{name}_t; CREATE TABLE {name}_cal AS SELECT * FROM _{name}_c")
+
+
+FRP = META.get("frp")  # written by data_prep/fire_intensity.py
+if FRP:
+    _factor_tables(FRP, "frp")
+K_FRP = float(FRP["factor_global"]) if FRP else 1.0
+
 ADMIN = Admin(DATA)
 if ADMIN.ok and ADMIN.cell_admin.exists():
     db.execute(f"CREATE TABLE cell_admin AS SELECT * FROM read_parquet('{ADMIN.cell_admin}')")
@@ -96,6 +113,13 @@ HAS_CELL_ADMIN = ADMIN.ok and ADMIN.cell_admin.exists()
 # data coverage, so the UI can say "outside our data" instead of drawing empty charts
 _cov = db.execute(f"SELECT min(lon), min(lat), max(lon), max(lat) FROM read_parquet('{COARSE or CELLS}')").fetchall()[0]
 META = {**META, "coverage_bbox": [round(float(v), 2) for v in _cov], "has_boundaries": HAS_CELL_ADMIN}
+# "What is burning": data_prep/land_cover.py label adds lc_<group> columns to the cells files and lc_group to points
+_cell_cols = set(db.execute(f"DESCRIBE SELECT * FROM read_parquet('{CELLS}')").df().column_name)
+HAS_FRP = bool(FRP) and {"frp", "frp_modis", "frp_viirs"} <= _cell_cols
+LC = META.get("land_cover")
+LC_KEYS = [g["key"] for g in LC["groups"]] if LC else []
+HAS_LC = bool(LC_KEYS) and all(f"lc_{k}" in db.execute(f"DESCRIBE SELECT * FROM read_parquet('{f}')").df().column_name.values
+                                for k in LC_KEYS for f in [CELLS] + ([COARSE] if COARSE else []))
 
 app = FastAPI(title="Hots45 API")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -187,20 +211,47 @@ def records(df):
     return json.loads(df.to_json(orient="records"))  # NaN -> null
 
 
+def parse_metric(metric, group=None):
+    """'hotspots' (counts) or 'frp' (Fire Radiative Power, MW). FRP is not split by land cover."""
+    if metric in (None, "", "hotspots"):
+        return "hotspots"
+    if metric != "frp" or not HAS_FRP:
+        ok = "'hotspots' or 'frp'" if HAS_FRP else "'hotspots' (FRP not built)"
+        raise HTTPException(400, f"metric must be {ok}, got {metric!r}")
+    if group:
+        raise HTTPException(400, "the fire-type filter applies to hotspot counts only, not to FRP")
+    return "frp"
+
+
+def parse_group(group):
+    """Land-cover group key (e.g. 'crop') or None for all fires."""
+    if not group or group == "all":
+        return None
+    if group not in LC_KEYS:
+        raise HTTPException(400, f"group must be one of {LC_KEYS or '(land cover not built)'}, got {group!r}")
+    return group
+
+
 # ---------- analytics ----------
 @lru_cache(maxsize=256)  # data is immutable while the process runs
-def series(bbox, reg=None):
+def series(bbox, reg=None, group=None, metric="hotspots"):
+    """Monthly series. metric 'frp': 'hotspots' holds harmonized total FRP (MW), modis/viirs the raw FRP sums."""
     w, p = where(bbox, reg=reg, alias="c.")
-    df = q(f"""SELECT month, sum(hotspots) hotspots, sum(modis)::BIGINT modis, sum(viirs)::BIGINT viirs,
-                      sum(modis * coalesce(t.k, m.k, ?)) modis_scaled
+    frp = metric == "frp"
+    val = "frp" if frp else f"lc_{group}" if group else "hotspots"
+    m_col, v_col, cast, kt, kc = ("frp_modis", "frp_viirs", "", "frp_tile", "frp_cal") if frp else ("modis", "viirs", "::BIGINT", "tile_k", "cal_k")
+    df = q(f"""SELECT month, sum({val}) hotspots, sum({m_col}){cast} modis, sum({v_col}){cast} viirs,
+                      sum({m_col} * coalesce(t.k, m.k, ?)) modis_scaled
                FROM read_parquet('{CELLS}') c
-               LEFT JOIN tile_k t ON t.tx = floor(c.lon / {TILE_DEG})::INT AND t.ty = floor(c.lat / {TILE_DEG})::INT
+               LEFT JOIN {kt} t ON t.tx = floor(c.lon / {TILE_DEG})::INT AND t.ty = floor(c.lat / {TILE_DEG})::INT
                                  AND t.cal = substr(c.month, 6, 2)::INT
-               LEFT JOIN cal_k m ON m.cal = substr(c.month, 6, 2)::INT
-               WHERE {w} GROUP BY month""", [K_GLOBAL] + p).set_index("month")
+               LEFT JOIN {kc} m ON m.cal = substr(c.month, 6, 2)::INT
+               WHERE {w} GROUP BY month""", [K_FRP if frp else K_GLOBAL] + p).set_index("month")
     df = df.reindex(MONTHS, fill_value=0)
     out = anomalies(df.hotspots.astype(float), GAP_MONTHS)  # months with a sensor outage are never flagged
     out["modis"], out["viirs"], out["modis_scaled"] = df.modis, df.viirs, df.modis_scaled.astype(float).round(1)
+    if group:  # raw sensor counts are not split by land cover; don't pass off the area's totals as the group's
+        out[["modis", "viirs", "modis_scaled"]] = np.nan
     out["note"] = out.index.map(lambda m: NOTES.get(m, ""))
     out["source"] = np.where(out.index < META["viirs_start"], "MODIS-scaled", "VIIRS")
     return out.drop(columns="cal").rename_axis("month").reset_index()
@@ -213,22 +264,34 @@ def meta():
 
 
 @app.get("/api/map")
-def map_(start: str = None, end: str = None, grid: float = Query(0.05, ge=0.05, le=5), bbox: str = None):
+def map_(start: str = None, end: str = None, grid: float = Query(0.05, ge=0.05, le=5), bbox: str = None, lc: bool = False,
+         metric: str = None):
+    """lc=1 adds the dominant land-cover group per cell: lc (index into meta land_cover.groups) and lc_share (0-1).
+    metric=frp adds frp: harmonized total Fire Radiative Power (MW) per cell."""
     s, e = parse_range(start, end)
+    lc = lc and HAS_LC
+    extra = "".join(f", sum(lc_{k}) lc_{k}" for k in LC_KEYS) if lc else ""
+    if parse_metric(metric) == "frp":
+        extra += ", round(sum(frp), 1) frp"
     b = parse_bbox(bbox)
     w, p = where(b, s, e)
     src, g = (COARSE, COARSE_DEG) if COARSE and grid >= COARSE_DEG - 1e-9 else (CELLS, META["grid_deg"])
     if grid <= g + 1e-9:
-        sql = (f"SELECT lon, lat, sum(hotspots) hotspots, sum(modis)::BIGINT modis, sum(viirs)::BIGINT viirs "
+        sql = (f"SELECT lon, lat, sum(hotspots) hotspots, sum(modis)::BIGINT modis, sum(viirs)::BIGINT viirs{extra} "
                f"FROM read_parquet('{src}') WHERE {w} GROUP BY lon, lat")
         params = p
     else:
         sql = (f"SELECT (floor(lon / ?) + 0.5) * ? lon, (floor(lat / ?) + 0.5) * ? lat, sum(hotspots) hotspots, "
-               f"sum(modis)::BIGINT modis, sum(viirs)::BIGINT viirs FROM read_parquet('{src}') WHERE {w} "
+               f"sum(modis)::BIGINT modis, sum(viirs)::BIGINT viirs{extra} FROM read_parquet('{src}') WHERE {w} "
                f"GROUP BY 1, 2")
         params = [grid, grid, grid, grid] + p
     df = q(sql, params)
     df["lon"], df["lat"], df["hotspots"] = df.lon.round(4), df.lat.round(4), df.hotspots.round(2)
+    if lc:
+        g = df[[f"lc_{k}" for k in LC_KEYS]].to_numpy(dtype=float)
+        df = df.drop(columns=[f"lc_{k}" for k in LC_KEYS])
+        df["lc"] = g.argmax(axis=1)
+        df["lc_share"] = np.round(g.max(axis=1) / np.maximum(g.sum(axis=1), 1e-9), 3)
     return records(df)
 
 
@@ -257,7 +320,7 @@ def anomaly(start: str = None, end: str = None, grid: float = Query(0.25, ge=0.0
     return records(out[keep])
 
 
-def window_stats(s, e, grid, b):
+def window_stats(s, e, grid, b, col="hotspots"):
     """Per cell: hotspots in [s, e] vs the median of the same window in every other year (missing = 0)."""
     S, L = month_idx(s), month_idx(e) - month_idx(s) + 1
     F, Lr = month_idx(META["first_month"]), month_idx(META["last_month"])
@@ -265,7 +328,7 @@ def window_stats(s, e, grid, b):
     src, g = (COARSE, COARSE_DEG) if COARSE and grid >= COARSE_DEG - 1e-9 else (CELLS, META["grid_deg"])
     w, p = where(b)
     df = q(f"""WITH c AS (
-                 SELECT (floor(lon / ?) + 0.5) * ? lon, (floor(lat / ?) + 0.5) * ? lat, hotspots,
+                 SELECT (floor(lon / ?) + 0.5) * ? lon, (floor(lat / ?) + 0.5) * ? lat, {col} hotspots,
                         floor((substr(month, 1, 4)::INT * 12 + substr(month, 6, 2)::INT - 1 - ?) / 12)::INT k,
                         substr(month, 1, 4)::INT * 12 + substr(month, 6, 2)::INT - 1 - ? AS off0
                  FROM read_parquet('{src}') WHERE {w})
@@ -289,30 +352,62 @@ SCALE_Q = [i / 100 for i in range(0, 100, 5)] + [0.99, 0.995]
 
 
 @app.get("/api/scale")
-def scale(grid: float = Query(..., ge=0.05, le=5)):
+def scale(grid: float = Query(..., ge=0.05, le=5), metric: str = None):
     """Fixed colour scale: quantiles of every non-zero monthly cell value in the full record at this grid,
     so a quiet month looks pale and a peak season looks red whatever period is shown."""
-    return _scale(round(grid, 4))
+    return _scale(round(grid, 4), parse_metric(metric))
 
 
 @lru_cache(maxsize=16)
-def _scale(grid):
+def _scale(grid, metric="hotspots"):
     src, g = (COARSE, COARSE_DEG) if COARSE and grid >= COARSE_DEG - 1e-9 else (CELLS, META["grid_deg"])
-    vals = (f"SELECT hotspots h FROM read_parquet('{src}')" if grid <= g + 1e-9 else
-            f"SELECT sum(hotspots) h FROM read_parquet('{src}') GROUP BY month, floor(lon / {grid}), floor(lat / {grid})")
+    col = "frp" if metric == "frp" else "hotspots"
+    vals = (f"SELECT {col} h FROM read_parquet('{src}')" if grid <= g + 1e-9 else
+            f"SELECT sum({col}) h FROM read_parquet('{src}') GROUP BY month, floor(lon / {grid}), floor(lat / {grid})")
     qs = db.cursor().execute(f"SELECT quantile_cont(h, {SCALE_Q}) FROM ({vals}) WHERE h > 0").fetchall()[0][0]
     return {"grid": grid, "q": {f"{k:g}": round(float(v), 2) for k, v in zip(SCALE_Q, qs)}}
 
 
 @app.get("/api/series")
-def series_(bbox: str = None, region: str = None):
-    return records(series(parse_bbox(bbox), parse_region(region)))
+def series_(bbox: str = None, region: str = None, group: str = None, metric: str = None):
+    """group: land-cover group key (meta land_cover.groups) to count only those fires. metric=frp: total FRP (MW)."""
+    g = parse_group(group)
+    return records(series(parse_bbox(bbox), parse_region(region), g, parse_metric(metric, g)))
+
+
+def landcover_text(groups):
+    """Plain-language summary computed from the shares, e.g. '86% cropland fires (likely crop-residue burning)'."""
+    g = sorted((x for x in groups if x["hotspots"] > 0), key=lambda x: -x["share"])
+    if not g:
+        return "No hotspots in this area and period."
+    name = lambda x: x["label"].lower()  # noqa: E731
+    top = g[0]
+    if top["share"] < 50:
+        return "Mixed: " + ", ".join(f"{round(x['share'])}% {name(x)}" for x in g[:3]) + " fires."
+    text = f"{round(top['share'])}% {name(top)} fires" + (" (likely crop-residue burning)" if top["key"] == "crop" else "")
+    rest = [f"{round(x['share'])}% {name(x)}" for x in g[1:3] if x["share"] >= 5]
+    return text + (f"; {', '.join(rest)}." if rest else ".")
+
+
+@app.get("/api/landcover")
+def landcover(bbox: str = None, region: str = None, start: str = None, end: str = None):
+    """'What is burning': harmonized hotspots per land-cover group (MCD12Q1, previous year's map) in an area and period."""
+    if not HAS_LC:
+        raise HTTPException(404, "land cover not built; run data_prep/land_cover.py label")
+    s, e = parse_range(start, end)
+    w, p = where(parse_bbox(bbox), s, e, parse_region(region), alias="c.")
+    v = db.cursor().execute(f"SELECT {', '.join(f'coalesce(sum(c.lc_{k}), 0)' for k in LC_KEYS)} "
+                            f"FROM read_parquet('{CELLS}') c WHERE {w}", p).fetchall()[0]
+    total = float(sum(v))
+    groups = [{**{k: g[k] for k in ("key", "label", "classes")}, "hotspots": round(float(x), 1),
+               "share": round(float(x) / total * 100, 1) if total else 0.0} for g, x in zip(LC["groups"], v)]
+    return {"start": s, "end": e, "total": round(total, 1), "groups": groups, "text": landcover_text(groups), "note": LC["note"]}
 
 
 @app.get("/api/summary")
-def summary(bbox: str = None, start: str = None, end: str = None, region: str = None):
+def summary(bbox: str = None, start: str = None, end: str = None, region: str = None, metric: str = None):
     s, e = parse_range(start, end)
-    df = series(parse_bbox(bbox), parse_region(region))
+    df = series(parse_bbox(bbox), parse_region(region), None, parse_metric(metric))
     r = df[(df.month >= s) & (df.month <= e)]
     total = float(r.hotspots.sum())
     by_year = r.groupby(r.month.str[:4]).hotspots.sum()
@@ -335,6 +430,27 @@ def summary(bbox: str = None, start: str = None, end: str = None, region: str = 
     }
 
 
+@app.get("/api/intensity")
+def intensity(bbox: str = None, region: str = None, start: str = None, end: str = None):
+    """Per-sensor FRP per hotspot (mean and 90th percentile, MW) in an area and period. NOT harmonized: MODIS (1 km)
+    and VIIRS (375 m) pixels see different fire sizes, so the two sensors are reported side by side, never merged."""
+    if not HAS_FRP:
+        raise HTTPException(404, "FRP not built; run data_prep/fire_intensity.py")
+    s, e = parse_range(start, end)
+    reg = parse_region(region)
+    w, p = points_where(parse_bbox(bbox), reg)
+    w, p = f"{w} AND pt.month BETWEEN ? AND ? AND pt.frp IS NOT NULL", p + [s, e]
+    if POINTS_PARTITIONED:
+        w, p = f"{w} AND pt.year BETWEEN ? AND ?", p + [int(s[:4]), int(e[:4])]
+    rows = db.cursor().execute(f"""SELECT sensor, count(*), avg(frp), approx_quantile(frp, 0.9), sum(frp)
+                                   FROM {POINTS} pt WHERE {w} GROUP BY sensor""", p).fetchall()
+    out = {x: None for x in ("MODIS", "VIIRS")}
+    for sensor, n, mean, p90, tot in rows:
+        out[sensor] = {"n": int(n), "mean": round(float(mean), 2), "p90": round(float(p90), 2), "total": round(float(tot), 1)}
+    return {"start": s, "end": e, "unit": "MW", "sensors": out,
+            "note": "Per-hotspot FRP is not comparable across sensors (375 m VIIRS pixels detect smaller fires than 1 km MODIS)."}
+
+
 @app.get("/api/download")
 def download(bbox: str = None, start: str = None, end: str = None, region: str = None):
     s, e = parse_range(start, end)
@@ -355,13 +471,14 @@ def download(bbox: str = None, start: str = None, end: str = None, region: str =
     if POINTS_PARTITIONED:  # lets DuckDB skip whole year folders
         w, p = f"{w} AND year BETWEEN ? AND ?", p + [int(s[:4]), int(e[:4])]
     cur = db.cursor()
-    cur.execute(f"SELECT lat, lon, strftime(acq_date, '%Y-%m-%d') acq_date, sensor, confidence, frp "
+    lc_cols = ["land_cover", "lc_group"] if HAS_LC else []
+    cur.execute(f"SELECT lat, lon, strftime(acq_date, '%Y-%m-%d') acq_date, sensor, confidence, frp{''.join(', ' + c for c in lc_cols)} "
                 f"FROM {POINTS} WHERE {w} ORDER BY acq_date", p)
 
     def rows():
         buf = io.StringIO()
         out = csv.writer(buf)
-        out.writerow(["lat", "lon", "acq_date", "sensor", "confidence", "frp"])
+        out.writerow(["lat", "lon", "acq_date", "sensor", "confidence", "frp"] + lc_cols)
         while chunk := cur.fetchmany(50_000):
             if poly is not None:
                 xy = np.array([(r[1], r[0]) for r in chunk])
@@ -414,26 +531,30 @@ def points_where(bbox, reg):
 
 
 @lru_cache(maxsize=64)
-def daily_all(bbox, reg):
-    """Harmonized hotspots per day for the whole record (zero-filled): VIIRS from viirs_start, MODIS x k before."""
+def daily_all(bbox, reg, group=None, metric="hotspots"):
+    """Harmonized hotspots (or total FRP, MW) per day for the whole record (zero-filled): VIIRS from viirs_start, MODIS x k before."""
     w, p = points_where(bbox, reg)
+    if group:
+        w, p = f"{w} AND pt.lc_group = ?", p + [group]
     vs = META["viirs_start"]
+    frp = metric == "frp"
+    v, kt, kc = ("coalesce(pt.frp, 0)", "frp_tile", "frp_cal") if frp else ("1.0", "tile_k", "cal_k")
     df = q(f"""SELECT pt.acq_date::DATE d,
-                      sum(CASE WHEN pt.sensor = 'VIIRS' AND pt.month >= ? THEN 1.0
-                               WHEN pt.sensor = 'MODIS' AND pt.month < ? THEN coalesce(t.k, m.k, ?) ELSE 0 END) h
+                      sum(CASE WHEN pt.sensor = 'VIIRS' AND pt.month >= ? THEN {v}
+                               WHEN pt.sensor = 'MODIS' AND pt.month < ? THEN {v} * coalesce(t.k, m.k, ?) ELSE 0 END) h
                FROM {POINTS} pt
-               LEFT JOIN tile_k t ON t.tx = floor(pt.lon / {TILE_DEG})::INT AND t.ty = floor(pt.lat / {TILE_DEG})::INT
+               LEFT JOIN {kt} t ON t.tx = floor(pt.lon / {TILE_DEG})::INT AND t.ty = floor(pt.lat / {TILE_DEG})::INT
                                  AND t.cal = substr(pt.month, 6, 2)::INT
-               LEFT JOIN cal_k m ON m.cal = substr(pt.month, 6, 2)::INT
-               WHERE {w} GROUP BY 1""", [vs, vs, K_GLOBAL] + p)
+               LEFT JOIN {kc} m ON m.cal = substr(pt.month, 6, 2)::INT
+               WHERE {w} GROUP BY 1""", [vs, vs, K_FRP if frp else K_GLOBAL] + p)
     s = df.set_index(pd.to_datetime(df.d)).h.astype(float)
     return s.reindex(pd.date_range(FIRST_DAY, LAST_DAY), fill_value=0.0)
 
 
 @lru_cache(maxsize=64)
-def daily_normal(bbox, reg):
+def daily_normal(bbox, reg, group=None, metric="hotspots"):
     """Median across years of the 7-day centred mean, per calendar day (MM-DD)."""
-    s = daily_all(bbox, reg).rolling(7, center=True, min_periods=1).mean()
+    s = daily_all(bbox, reg, group, metric).rolling(7, center=True, min_periods=1).mean()
     return s.groupby(s.index.strftime("%m-%d")).median()
 
 
@@ -444,14 +565,15 @@ def parse_day(v, name):
 
 
 @app.get("/api/daily")
-def daily(start: str, end: str, bbox: str = None, region: str = None):
+def daily(start: str, end: str, bbox: str = None, region: str = None, group: str = None, metric: str = None):
     """Daily hotspots in [start, end] (max 400 days) with the normal for each calendar day."""
     s, e = parse_day(start, "start"), parse_day(end, "end")
     if e < s or (e - s).days > 400:
         raise HTTPException(400, "daily range must be 1-400 days")
-    b, reg = parse_bbox(bbox), parse_region(region)
-    d = daily_all(b, reg)[max(s, FIRST_DAY):min(e, LAST_DAY)]
-    norm = daily_normal(b, reg)
+    b, reg, grp = parse_bbox(bbox), parse_region(region), parse_group(group)
+    met = parse_metric(metric, grp)
+    d = daily_all(b, reg, grp, met)[max(s, FIRST_DAY):min(e, LAST_DAY)]
+    norm = daily_normal(b, reg, grp, met)
     med = norm.reindex(d.index.strftime("%m-%d")).to_numpy()
     out = pd.DataFrame({"date": d.index.strftime("%Y-%m-%d"), "hotspots": d.round(1).to_numpy(), "median": np.round(med, 1)})
     out["pct_vs_median"] = np.where(out["median"] > 0, ((out.hotspots - out["median"]) / out["median"].where(out["median"] > 0) * 100).round(1), np.nan)
@@ -465,10 +587,10 @@ def _when(ts):
 
 
 @app.get("/api/season")
-def season(bbox: str = None, region: str = None):
+def season(bbox: str = None, region: str = None, group: str = None, metric: str = None):
     """Plain-language fire season for an area: typical start, peak week and end, plus the latest season vs normal."""
-    b, reg = parse_bbox(bbox), parse_region(region)
-    d = daily_all(b, reg)
+    b, reg, grp = parse_bbox(bbox), parse_region(region), parse_group(group)
+    d = daily_all(b, reg, grp, parse_metric(metric, grp))
     if d.sum() == 0:
         return {"text": "No fires recorded in this area.", "start": None, "peak": None, "end": None}
     clim = d.groupby(d.index.strftime("%m-%d")).mean().drop("02-29", errors="ignore")
@@ -508,6 +630,51 @@ def season(bbox: str = None, region: str = None):
             "data_through": LAST_DAY.strftime("%Y-%m-%d")}
 
 
+@lru_cache(maxsize=64)
+def _outlook(bbox, reg, cutoff):
+    """Outlook for cutoff+1..+3 from months <= cutoff, with the leak-free backtest and next-season dates."""
+    vs = META["viirs_start"]
+    s = series(bbox, reg).set_index("month").hotspots
+    s = s[s.index <= cutoff]
+    bt = outlook_model.backtest(s, vs, outlook_model.BACKTEST[0], min(outlook_model.BACKTEST[1], cutoff))
+    o = outlook_model.outlook(s, cutoff, vs, bt)
+    cut_day = pd.Timestamp(f"{cutoff}-01") + pd.offsets.MonthEnd(0)
+    o["season"] = outlook_model.season_dates(daily_all(bbox, reg)[:cut_day], cut_day, int(vs[:4]))
+    recent = [outlook_model.add_months(cutoff, -k) for k in range(3)]
+    o["provisional_inputs"] = [m for m in recent if m in META.get("provisional_months", [])]
+    o["gap_inputs"] = [m for m in recent if m in GAP_MONTHS]
+    # normal for each calendar month (VIIRS-era median before the cutoff), to tell fire-season months from quiet ones
+    v = s[s.index >= vs]
+    o["monthly_normals"] = {f"{c:02d}": float(v[v.index.str[5:] == f"{c:02d}"].median()) for c in range(1, 13)}
+    return o
+
+
+def cutoff_for(day):
+    """Latest complete month on or before a day."""
+    m = day.strftime("%Y-%m")
+    return min(m if (day + pd.Timedelta(days=1)).day == 1 else outlook_model.add_months(m, -1), LAST_COMPLETE)
+
+
+@app.get("/api/outlook")
+def outlook(bbox: str = None, region: str = None):
+    """Fire outlook for the next 1-3 months after the latest complete month (statistical; see backend/outlook.py)."""
+    return _outlook(parse_bbox(bbox), parse_region(region), LAST_COMPLETE)
+
+
+def outlook_alert(o, asof):
+    """'Outlook: above-normal season likely' when, for a fire-season month in the next 3, the 80% range lies mostly
+    above normal (P(above normal) >= 0.8)."""
+    norms = sorted(o["monthly_normals"].values())
+    season_level = norms[len(norms) // 2]  # a fire-season month has a normal at or above the median month
+    hits = [m for m in o["months"] if m["p_above"] >= 0.8 and m["normal"] >= max(season_level, alerts_engine.MIN_HOTSPOTS)]
+    if not hits:
+        return None
+    m = hits[0]
+    return {"kind": "outlook", "severity": "Watch", "asof": str(asof.date()), "provisional": bool(o["provisional_inputs"]),
+            "message": f"Outlook: above-normal season likely. {pd.Period(m['month'], 'M').strftime('%b %Y')}: {m['lo']:,.0f}–{m['hi']:,.0f} "
+                       f"hotspots expected (80% range) vs normal {m['normal']:,.0f}. {outlook_model.DISCLAIMER}"}
+
+
 @app.get("/api/alerts")
 def alerts(asof: str, bbox: str = None, region: str = None):
     """Alerts lite for one area as of a date (inclusive; a simulated date never sees later data)."""
@@ -515,7 +682,13 @@ def alerts(asof: str, bbox: str = None, region: str = None):
     if not (FIRST_DAY <= d <= LAST_DAY):
         raise HTTPException(400, f"asof must be within {FIRST_DAY.date()}..{LAST_DAY.date()}")
     gaps = [(g["start"], g["end"]) for g in META.get("data_gaps", []) if g.get("sensor") == "VIIRS"]
-    return alerts_engine.evaluate(daily_all(parse_bbox(bbox), parse_region(region)), d, gaps, META.get("provisional_months", []))
+    b, reg = parse_bbox(bbox), parse_region(region)
+    out = alerts_engine.evaluate(daily_all(b, reg), d, gaps, META.get("provisional_months", []))
+    try:
+        a = outlook_alert(_outlook(b, reg, cutoff_for(d)), d)
+    except (ValueError, KeyError, IndexError):  # too little history before a simulated date for an outlook
+        a = None
+    return out + ([a] if a else [])
 
 
 def need_boundaries():
@@ -593,14 +766,15 @@ def _boundaries(level, b, zoom):
 
 
 @app.get("/api/cell")
-def cell(lon: float, lat: float, grid: float = Query(..., ge=0.05, le=5), start: str = None, end: str = None):
-    """Hover details for one map cell: admin names at its centre, hotspots, and % vs the median of the same months."""
+def cell(lon: float, lat: float, grid: float = Query(..., ge=0.05, le=5), start: str = None, end: str = None, metric: str = None):
+    """Hover details for one map cell: admin names at its centre, hotspots (or FRP), and % vs the median of the same months."""
     s, e = parse_range(start, end)
+    col = "frp" if parse_metric(metric) == "frp" else "hotspots"
     out = {"lon": lon, "lat": lat, **(ADMIN.at(lon, lat) if ADMIN.ok else {})}
     out.update(current=None, median=None, pct_vs_median=None)
     if month_idx(e) - month_idx(s) < 12:
         h = grid / 2
-        st = window_stats(s, e, grid, (lon - h + 1e-6, lat - h + 1e-6, lon + h - 1e-6, lat + h - 1e-6))
+        st = window_stats(s, e, grid, (lon - h + 1e-6, lat - h + 1e-6, lon + h - 1e-6, lat + h - 1e-6), col)
         if not st.empty:
             r = st.iloc[0]
             out.update(current=float(r.current), median=float(r.baseline),

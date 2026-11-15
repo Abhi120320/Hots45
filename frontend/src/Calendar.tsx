@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { Meta, SeriesRow } from './api'
-import { MONTHS, fmt, monthLabel } from './colors'
+import { MONTHS, T, abbr, fmt, monthLabel } from './colors'
 import { svgToPng } from './charts'
+import { Button, Segmented } from './ui'
 
 // ColorBrewer YlOrRd (colour-blind safe): pale cream = few fires -> dark red = most. ZERO is near-white, not blue.
 const FIRE = ['#ffffb2', '#fed976', '#feb24c', '#fd8d3c', '#f03b20', '#bd0026']
@@ -12,14 +13,7 @@ const PCT_BREAKS = [-50, -25, -10, 10, 33, 100] // ÷2, ÷1.33, -10%, +10%, ×1.
 const PCT_LABELS = ['≤ −50%', '−50 to −25%', '−25 to −10%', 'within ±10%', '+10 to +33%', '+33 to +100%', '≥ +100%']
 const NO_BASE = '#d9d6cf' // median is 0: no "normal" to compare against
 
-/** 850, 1.2k, 12k, 1.2M */
-export const abbr = (v: number) => {
-  const a = Math.abs(v)
-  if (a < 1000) return String(Math.round(v))
-  if (a < 9950) return `${(v / 1000).toFixed(1)}k`
-  if (a < 999_500) return `${Math.round(v / 1000)}k`
-  return `${(v / 1e6).toFixed(1)}M`
-}
+export { abbr } from './colors'
 
 const luminance = (hex: string) => {
   const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -74,11 +68,21 @@ interface Props {
   selected?: [string, string] // highlighted months (the timeline selection)
   large?: boolean // expanded view: wider cells, bigger text, full numbers
   svgRefOut?: (el: SVGSVGElement | null) => void
+  unit?: string // 'hotspots' or 'MW' (total FRP)
 }
 
-export default function Calendar({ rows, meta, onPickMonth, selected, large = false, svgRefOut }: Props) {
+export default function Calendar({ rows, meta, onPickMonth, selected, large = false, svgRefOut, unit = 'hotspots' }: Props) {
   const [mode, setMode] = useState<'hotspots' | 'normal'>('hotspots')
-  const [numbers, setNumbers] = useState(true)
+  const [numbers, setNumbers] = useState(large) // compact: cells too small for 12px numbers; values are in the tooltip
+  const boxRef = useRef<HTMLDivElement>(null)
+  const [boxW, setBoxW] = useState(336)
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el || large) return
+    const ro = new ResizeObserver(() => setBoxW(el.clientWidth))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [large])
   const [newestFirst, setNewestFirst] = useState(true)
   const [focus, setFocus] = useState<{ y: number; m: number } | null>(null)
   const [tip, setTip] = useState<{ row: SeriesRow; x: number; y: number } | null>(null)
@@ -103,12 +107,13 @@ export default function Calendar({ rows, meta, onPickMonth, selected, large = fa
   }, [rows, meta, newestFirst])
 
   // ---------- layout (viewBox units = px at 408 wide) ----------
-  const W = large ? 1200 : 408, LABEL = large ? 58 : 30, BAR = large ? 170 : 62, GAP = large ? 14 : 6
-  const cw = (W - LABEL - GAP - BAR) / 12, ch = large ? 22 : 17, top = large ? 26 : 14
-  const F = large ? { cell: 12.5, axis: 13, small: 11.5, tiny: 9, barText: 12 } : { cell: 7.6, axis: 8.5, small: 7, tiny: 5.5, barText: 7.5 }
+  // compact: drawn 1:1 at the panel's width so every label is a true 12px; large: scaled viewBox, 14px-equivalent text
+  const W = large ? 1200 : Math.max(280, boxW), LABEL = large ? 58 : 40, BAR = large ? 170 : 80, GAP = large ? 14 : 8
+  const cw = (W - LABEL - GAP - BAR) / 12, ch = large ? 22 : 14, top = large ? 26 : 20
+  const F = large ? { cell: 12.5, axis: 14, small: 12, tiny: 9, barText: 12 } : { cell: 12, axis: 12, small: 12, tiny: 12, barText: 12 }
   const num = (v: number) => (large ? fmt(v) : abbr(v))
   const gridH = d.years.length * ch
-  const bottom = top + gridH + 6, bottomH = large ? 64 : 34
+  const bottom = top + gridH + 8, bottomH = large ? 64 : 40
   const H = bottom + bottomH + 14
   const x = (m: number) => LABEL + m * cw
   const y = (i: number) => top + i * ch
@@ -156,35 +161,32 @@ export default function Calendar({ rows, meta, onPickMonth, selected, large = fa
   const seasonTxt = d.mean.every(v => v === 0) ? 'no fires recorded'
     : `${d.season.label}${d.season.also.length ? ` (also ${d.season.also.join(', ')})` : ''}`
 
-  const chip = (on: boolean) => `h-6 px-2 text-[11px] ${on ? 'bg-accent text-bg font-medium' : 'text-dim hover:text-ink'}`
   const firstFocusable = focus ?? { y: 0, m: 0 }
 
   return (
     <div>
-      <p className={`${large ? "text-[16px]" : "text-[12px]"} text-ink leading-relaxed mb-2`} aria-live="polite">
-        Fire season: <b>{seasonTxt}</b>. Worst year: <b>{d.worst}</b> ({abbr(d.totals[d.worst])} hotspots).
+      <p className={`${large ? "text-base" : "text-xs"} text-ink leading-relaxed mb-2`} aria-live="polite">
+        Fire season: <b>{seasonTxt}</b>. Worst year: <b>{d.worst}</b> ({abbr(d.totals[d.worst])} {unit}).
         {' '}Latest complete month ({monthLabel(L.month)}): <b>{lastTxt}</b>{isProv(L) ? ' (provisional)' : ''}.
       </p>
 
       <div className="flex flex-wrap items-center gap-2 mb-2">
-        <div className="flex border border-line rounded-sm overflow-hidden" role="group" aria-label="Calendar colour mode">
-          <button className={chip(mode === 'hotspots')} aria-pressed={mode === 'hotspots'} onClick={() => setMode('hotspots')}>Hotspots</button>
-          <button className={chip(mode === 'normal')} aria-pressed={mode === 'normal'} onClick={() => setMode('normal')}>Compared to normal</button>
-        </div>
-        <label className="flex items-center gap-1 text-[11px] text-dim">
-          <input type="checkbox" checked={numbers} onChange={e => setNumbers(e.target.checked)} className="accent-[#E8743B]" /> Numbers
-        </label>
-        <button className="text-[11px] text-dim hover:text-ink underline underline-offset-2" onClick={() => setNewestFirst(!newestFirst)}>
-          {newestFirst ? 'Newest first' : 'Oldest first'} ⇅
-        </button>
-        <button className="ml-auto text-[11px] text-dim hover:text-ink underline underline-offset-2" onClick={exportPng} aria-label="Download calendar as PNG">PNG</button>
-        {pngErr && <span role="alert" className="text-[11px] text-accent">{pngErr}</span>}
+        <Segmented label="Calendar colour mode" value={mode} onChange={setMode}
+          options={[{ value: 'hotspots', label: unit === 'MW' ? 'Total FRP' : 'Hotspots' }, { value: 'normal', label: 'vs normal' }]} />
+        {large && (
+          <label className="flex items-center gap-2 h-8 text-sm text-dim">
+            <input type="checkbox" checked={numbers} onChange={e => setNumbers(e.target.checked)} className="accent-accent" /> Numbers
+          </label>
+        )}
+        <Button variant="ghost" onClick={() => setNewestFirst(!newestFirst)}>{newestFirst ? 'Newest first' : 'Oldest first'} ⇅</Button>
+        <Button variant="ghost" className="ml-auto" onClick={exportPng} aria-label="Download calendar as PNG">PNG</Button>
+        {pngErr && <span role="alert" className="text-xs text-accent">{pngErr}</span>}
       </div>
 
-      <div className="relative">
+      <div className="relative" ref={boxRef}>
         <svg ref={el => { svgRef.current = el; svgRefOut?.(el) }} viewBox={`0 0 ${W} ${H}`} width="100%" role="grid" onMouseLeave={() => setTip(null)}
           aria-label={`Burning calendar, ${d.years.length} years by 12 months. Arrow keys move between months, Enter shows that month on the map.`}
-          style={{ fontFamily: 'IBM Plex Mono, ui-monospace, monospace' }}>
+          style={{ fontFamily: `${T.mono}, ui-monospace, monospace` }}>
           <defs>
             {['dark', 'light'].map(t => (
               <pattern key={t} id={`hatch-${t}`} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -195,15 +197,15 @@ export default function Calendar({ rows, meta, onPickMonth, selected, large = fa
 
           {/* month header; peak month highlighted */}
           {MONTHS.map((m, i) => (
-            <text key={m} x={x(i) + cw / 2} y={top - 4} textAnchor="middle" fontSize={F.axis}
-              fill={i === d.season.peak ? '#E8743B' : '#9AA3AE'} fontWeight={i === d.season.peak ? 700 : 400}>{m}</text>
+            <text key={m} x={x(i) + cw / 2} y={top - 6} textAnchor="middle" fontSize={F.axis}
+              fill={i === d.season.peak ? T.accent : T.dim} fontWeight={i === d.season.peak ? 600 : 400}>{large ? m : m[0]}</text>
           ))}
-          <text x={LABEL + 12 * cw + GAP} y={top - 4} fontSize={F.small} fill="#8A939E">Year total</text>
+          <text x={LABEL + 12 * cw + GAP} y={top - 6} fontSize={F.small} fill={T.dim}>{large ? 'Year total' : 'Year'}</text>
 
           {d.years.map((yr, yi) => (
             <g key={yr} role="row">
               <text x={LABEL - 4} y={y(yi) + ch / 2 + 3} textAnchor="end" fontSize={F.axis}
-                fill={yr === d.worst ? '#E8743B' : '#9AA3AE'} fontWeight={yr === d.worst ? 700 : 400}>{yr}</text>
+                fill={yr === d.worst ? T.accent : T.dim} fontWeight={yr === d.worst ? 600 : 400}>{yr}</text>
               {MONTHS.map((_, m) => {
                 const r = d.byMonth.get(cellKey(yi, m))
                 const cx = x(m), cy = y(yi)
@@ -214,11 +216,11 @@ export default function Calendar({ rows, meta, onPickMonth, selected, large = fa
                 return (
                   <g key={m} role="gridcell" data-cell={`${yi}-${m}`} style={{ cursor: 'pointer', outline: 'none' }}
                     tabIndex={firstFocusable.y === yi && firstFocusable.m === m ? 0 : -1}
-                    aria-label={`${monthLabel(r.month)}: ${fmt(r.hotspots)} hotspots, ${r.pct_vs_median == null ? 'no median' : `${pctText(r.pct_vs_median)}% vs median`}${r.flag ? `, ${r.flag}` : ''}${r.note ? `, ${r.note}` : ''}`}
+                    aria-label={`${monthLabel(r.month)}: ${fmt(r.hotspots)} ${unit}, ${r.pct_vs_median == null ? 'no median' : `${pctText(r.pct_vs_median)}% vs median`}${r.flag ? `, ${r.flag}` : ''}${r.note ? `, ${r.note}` : ''}`}
                     onMouseEnter={() => show(yi, m)} onFocus={() => { setFocus({ y: yi, m }); show(yi, m) }}
                     onClick={() => onPickMonth(r.month)} onKeyDown={e => onKey(e, yi, m)}>
                     <rect x={cx + 0.5} y={cy + 0.5} width={cw - 1} height={ch - 1} rx="1.5" fill={fill}
-                      stroke={isFocus ? '#E6E8EB' : isSel ? '#E8743B' : 'none'} strokeWidth={isSel && !isFocus ? 2 : 1.5} />
+                      stroke={isFocus ? '#E6E8EB' : isSel ? T.accent : 'none'} strokeWidth={isSel && !isFocus ? 2 : 1.5} />
                     {isGap(r) && <rect x={cx + 0.5} y={cy + 0.5} width={cw - 1} height={ch - 1} rx="1.5" fill={`url(#hatch-${ink === '#ffffff' ? 'light' : 'dark'})`} />}
                     {numbers && (
                       <text x={cx + cw / 2} y={cy + ch / 2 + F.cell * 0.36} textAnchor="middle" fontSize={F.cell} fill={ink}>{textOf(r)}</text>
@@ -226,15 +228,15 @@ export default function Calendar({ rows, meta, onPickMonth, selected, large = fa
                     {mode === 'hotspots' && r.flag && (
                       <circle cx={cx + cw - (large ? 6 : 3.2)} cy={cy + (large ? 6 : 3.2)} r={large ? 3.5 : 1.9} fill={ink} stroke={fill} strokeWidth="0.6" />
                     )}
-                    {isProv(r) && <text x={cx + 3} y={cy + ch - 3} fontSize={F.tiny} fontWeight="700" fill={ink}>P</text>}
+                    {isProv(r) && <text x={cx + 3} y={cy + ch - 3} fontSize={F.tiny} fontWeight="600" fill={ink}>P</text>}
                   </g>
                 )
               })}
               {/* right margin: year total */}
               <rect x={LABEL + 12 * cw + GAP} y={y(yi) + 4} height={ch - 8} rx="1"
-                width={Math.max(1, (d.totals[yr] / d.maxTotal) * (BAR - (large ? 74 : 30)))} fill={yr === d.worst ? '#E8743B' : '#6B7480'} />
-              <text x={LABEL + 12 * cw + GAP + (d.totals[yr] / d.maxTotal) * (BAR - (large ? 74 : 30)) + 4} y={y(yi) + ch / 2 + F.barText * 0.36}
-                fontSize={F.barText} fill={yr === d.worst ? '#E8743B' : '#9AA3AE'}>
+                width={Math.max(1, (d.totals[yr] / d.maxTotal) * (BAR - (large ? 74 : 48)))} fill={yr === d.worst ? T.accent : '#6B7480'} />
+              <text x={LABEL + 12 * cw + GAP + (d.totals[yr] / d.maxTotal) * (BAR - (large ? 74 : 48)) + 4} y={y(yi) + ch / 2 + F.barText * 0.36}
+                fontSize={F.barText} fill={yr === d.worst ? T.accent : T.dim}>
                 {num(d.totals[yr])}{d.complete(yr) ? '' : '*'}
               </text>
             </g>
@@ -246,51 +248,53 @@ export default function Calendar({ rows, meta, onPickMonth, selected, large = fa
             return (
               <g key={i}>
                 <rect x={x(i) + 3} y={bottom + bottomH - (large ? 18 : 10) - h} width={cw - 6} height={Math.max(0.5, h)} rx="1"
-                  fill={i === d.season.peak ? '#E8743B' : '#6B7480'} />
-                <text x={x(i) + cw / 2} y={bottom + bottomH - 1} textAnchor="middle" fontSize={F.small} fill={i === d.season.peak ? '#E8743B' : '#8A939E'}>
-                  {num(Math.round(v))}
-                </text>
+                  fill={i === d.season.peak ? T.accent : '#6B7480'} />
+                {(large || i === d.season.peak) && ( // compact columns are too narrow for 12 labels: only the peak month's
+                  <text x={x(i) + cw / 2} y={bottom + bottomH - 1} textAnchor="middle" fontSize={F.small} fill={i === d.season.peak ? T.accent : T.dim}>
+                    {num(Math.round(v))}
+                  </text>
+                )}
               </g>
             )
           })}
-          <text x={LABEL - 4} y={bottom + bottomH - 1} textAnchor="end" fontSize={F.small} fill="#8A939E">{large ? 'Avg' : 'avg'}</text>
+          <text x={LABEL - 4} y={bottom + bottomH - 1} textAnchor="end" fontSize={F.small} fill={T.dim}>{large ? 'Avg' : 'avg'}</text>
         </svg>
 
         {tip && (
-          <div className="absolute z-10 pointer-events-none num text-[11px] leading-relaxed bg-panel border border-line rounded-sm px-2.5 py-1.5 w-max max-w-[240px]"
+          <div className="absolute z-10 pointer-events-none num text-xs leading-relaxed bg-panel border border-line rounded-md px-3 py-2 w-max max-w-[240px]"
             style={{ left: Math.min(tip.x, 200), top: tip.y - 8, transform: 'translate(-30%, -100%)' }} role="tooltip">
-            <div className="text-ink font-medium">{monthLabel(tip.row.month)}</div>
-            <div>{fmt(tip.row.hotspots)} hotspots</div>
+            <div className="text-ink font-semibold">{monthLabel(tip.row.month)}</div>
+            <div>{fmt(tip.row.hotspots)} {unit}</div>
             <div className="text-dim">median for {MONTHS[+tip.row.month.slice(5, 7) - 1]}: {fmt(tip.row.hist_median)}</div>
             <div className="text-dim">{tip.row.pct_vs_median == null ? 'no median to compare' : `${pctText(tip.row.pct_vs_median)}% vs median`}{tip.row.flag ? ` · ${tip.row.flag}` : ''}</div>
             <div className="text-dim">{tip.row.source === 'VIIRS' ? 'VIIRS' : 'MODIS scaled to VIIRS'}</div>
             {tip.row.note && <div className="text-accent">{tip.row.note}</div>}
-            <div className="text-faint text-[10px]">Click to show on the map</div>
+            <div className="text-dim text-xs">Click to show on the map</div>
           </div>
         )}
       </div>
 
       {/* legend */}
-      <div className={`mt-2 flex flex-wrap gap-x-2 gap-y-1 items-center num ${large ? "text-[13px]" : "text-[10px]"} text-dim`} aria-label="Colour legend">
+      <div className={`mt-2 flex flex-wrap gap-x-2 gap-y-1 items-center num ${large ? "text-sm" : "text-xs"} text-dim`} aria-label="Colour legend">
         {mode === 'hotspots' ? (
           <>
-            <span className="inline-flex items-center gap-1"><i className="w-3 h-2.5 rounded-[2px] inline-block" style={{ background: ZERO }} />0</span>
+            <span className="inline-flex items-center gap-1"><i className="w-3 h-2.5 rounded-sm inline-block" style={{ background: ZERO }} />0</span>
             {[0, ...d.cls.breaks].map((b, i, arr) => (
               <span key={b} className="inline-flex items-center gap-1">
-                <i className="w-3 h-2.5 rounded-[2px] inline-block" style={{ background: d.cls.color(Math.max(b, 1)) }} />
+                <i className="w-3 h-2.5 rounded-sm inline-block" style={{ background: d.cls.color(Math.max(b, 1)) }} />
                 {i + 1 < arr.length ? `${abbr(Math.max(1, b))}–${abbr(arr[i + 1])}` : `≥ ${abbr(b)}`}
               </span>
             ))}
           </>
         ) : (
           DIVERGING.map((c, i) => (
-            <span key={c} className="inline-flex items-center gap-1"><i className="w-3 h-2.5 rounded-[2px] inline-block border border-line" style={{ background: c }} />{PCT_LABELS[i]}</span>
+            <span key={c} className="inline-flex items-center gap-1"><i className="w-3 h-2.5 rounded-sm inline-block border border-line" style={{ background: c }} />{PCT_LABELS[i]}</span>
           ))
         )}
       </div>
-      <p className="mt-1 text-[10px] text-faint">
-        {mode === 'hotspots' ? 'Hotspots per month (VIIRS-equivalent). ● significant anomaly (|z| > 2) · ' : 'Numbers: % vs the median for that month; grey = median is 0. '}
-        <span className="inline-block w-3 h-2 align-middle mr-0.5" style={{ background: 'repeating-linear-gradient(45deg,#9AA3AE 0 1px,transparent 1px 3px)' }} />data gap · <b>P</b> provisional (NRT) · * partial year
+      <p className="mt-1 text-xs text-dim">
+        {mode === 'hotspots' ? `${unit === 'MW' ? 'Total FRP per month, MW' : 'Hotspots per month'} (VIIRS-equivalent). ● significant anomaly (|z| > 2) · ` : 'Numbers: % vs the median for that month; grey = median is 0. '}
+        <span className="inline-block w-3 h-2 align-middle mr-1" style={{ background: 'repeating-linear-gradient(45deg,#9AA3AE 0 1px,transparent 1px 3px)' }} />data gap · <b>P</b> provisional (NRT) · * partial year
       </p>
     </div>
   )

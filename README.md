@@ -27,6 +27,9 @@ cd data_prep
 ../.venv/bin/python fire_harmonize.py --modis "data/fire_*_M-C61_*.csv" --viirs "data/fire_*_SV-C2_*.csv" \
     --start 2003-01 --end 2026-10 --fit-end 2021-12 --region Asia --report "Punjab-Haryana:73.8,28.4,77.6,32.6"
 ../.venv/bin/python build_boundaries.py   # states/districts for search, labels, polygon areas (~11 min first run)
+../.venv/bin/python fire_intensity.py --report "Punjab-Haryana:73.8,28.4,77.6,32.6"   # FRP: k_FRP, R², diagnostics (~5 s)
+../.venv/bin/python land_cover.py fetch   # MODIS land cover via AppEEARS (needs EARTHDATA_USER/PASS in .env; cached)
+../.venv/bin/python land_cover.py label   # "What is burning": land cover per hotspot + per-group cell counts
 cd ..
 
 # 2. Build the frontend once, then one process serves everything
@@ -47,6 +50,7 @@ There are no secrets. Each setting has a default, so `.env` files are optional.
 | `.env` (copy from `.env.example`) | `APP_DATA` | `backend/app_data` | folder with `cells.parquet`, `points.parquet`, `meta.json` |
 | | `CORS_ORIGINS` | `*` | comma-separated origins allowed to call the API |
 | | `PORT` | `8000` | host port for docker compose |
+| | `EARTHDATA_USER`, `EARTHDATA_PASS` | none | NASA Earthdata login, only for `land_cover.py fetch`/`spotcheck` (the one secret; `.env` is gitignored) |
 | `frontend/.env` (copy from `frontend/.env.example`) | `VITE_API_URL` | empty (same origin) | API base URL when the frontend is hosted separately |
 
 To run locally with the file: `.venv/bin/uvicorn backend.main:app --env-file .env`. Docker compose reads `.env` automatically.
@@ -115,6 +119,96 @@ The frontend reads everything from the API, including the record span, factors, 
 - **Anomalies:** for each calendar month across all years: median, % vs median, mean, std (population), and z.
   The flag is "unusually high" if z > 2, "unusually low" if z < −2.
 
+## Fire intensity: Fire Radiative Power (FRP)
+
+`data_prep/fire_intensity.py` works from the `frp` column (MW) of the cleaned points. Run it after `fire_harmonize.py`; it can be re-run.
+
+- **Aggregates:** for each 0.05° cell and month, `frp_modis` and `frp_viirs` (sum of FRP over detections) and
+  `frp_p90_modis` and `frp_p90_viirs` (90th percentile per hotspot) go into `cells.parquet`. The sums also go into the 0.5° globe file.
+  `frp_tiles.parquet` holds the count, sum, mean and p90 per 10° tile, month and sensor.
+  Mean FRP per hotspot is `frp_<sensor> / <sensor count>`.
+- **Harmonized total FRP (`frp`):** computed the same way as counts. For each 10° tile and calendar month, VIIRS_FRP = k_FRP × MODIS_FRP
+  is fitted through the origin on monthly totals from 2012-02 to 2021-12. Tile-months with fewer than 3 overlap months use the domain k_FRP for that calendar month.
+  Before 2012-02 total FRP = k_FRP × MODIS; from 2012-02 it is VIIRS. Factors and diagnostics are written to `meta.json` → `frp`.
+- **Not harmonized:** mean and p90 FRP per hotspot. A 375 m VIIRS pixel detects many small fires that a 1 km MODIS pixel misses, so
+  VIIRS per-hotspot FRP is about 4× lower (Asia, 2012–2021: MODIS 39 MW, VIIRS 8 MW). The app shows these per sensor only.
+- **"Fire energy"** in the app means ΣFRP, the sum of FRP (MW) over all detections. It is a proxy for the amount of burning, not
+  energy in joules, because each fire is seen only at overpass times.
+- **Result (Asia, fit window):** k_FRP = 0.93 domain-wide. R² is 0.993 for Asia and 0.979 for Punjab–Haryana, with bias −3.0% and −1.2%.
+  The effective k_FRP depends on the kind of fire. It is 1.5–2.2 over South Asian cropland tiles (Punjab 1.73), where VIIRS sees more small
+  fires, and 0.5–0.8 over boreal and steppe tiles, where VIIRS reports lower FRP than MODIS for large co-detected fires.
+- **Reliability:** monthly R² is high everywhere, but it is dominated by the seasonal cycle. The script also checks how stable the yearly
+  VIIRS/MODIS ratio is inside the fit window. It flags tiles holding ≥ 0.5% of VIIRS FRP whose R² is below 0.6 or whose yearly-ratio CV is above 0.2.
+  Four tiles are flagged: Sumatra (100°E, 10°S; ratio 0.83–2.16), Borneo/Java (110°E, 10°S; 1.08–2.07), southern Siberia/Mongolia
+  (100°E, 50°N; 0.58–1.11) and one small tile. In Riau the ratio falls from about 1.0 (2012–2017) to 0.6–0.84 (2018–2021).
+  So pre-2012 FRP for the peat and forest regions of Indonesia is uncertain by about ±25% in a given year, compared with about ±10% for Asia and Punjab.
+  After 2021 the drift of the Aqua and Terra overpass times also biases k_FRP × MODIS (Asia −14%), which is why those years are left out of the fit.
+
+## Fire outlook (statistical forecast)
+
+`backend/outlook.py` gives a forecast for the 1–3 months after the latest complete month, for any selected area,
+using monthly harmonized hotspots. It is pure functions, served by `/api/outlook` and covered by `backend/test_outlook.py`.
+
+- **Baseline:** the median, 10th and 90th percentile of the same calendar month in VIIRS-era years (2012 on) before the target month.
+- **Trend:** Sen's slope on yearly totals of the last 10 complete years. It is applied only if Mann-Kendall p < 0.05, as a factor
+  (clamped to ×⅓…×3) from the baseline's middle year to the target year.
+- **Persistence:** the last 3 complete months compared with their normal, giving a ratio r. The forecast is multiplied by r^w,
+  with a separate w for each horizon, chosen from {0, ¼, ½, ¾, 1} as the weight with the lowest error on earlier backtest forecasts only.
+- **80% range:** the 10th–90th percentile of the model's own earlier log-errors at that horizon, once ≥ 24 verified forecasts exist.
+  Before that it uses the baseline p10–p90, which turned out too narrow (about 35% coverage in 2015–2016).
+- **Backtest:** every month 2015–2025, horizons 1–3, each forecast made only from data before it. A test corrupts every month after a
+  cutoff and checks that all forecasts made at or before it are unchanged. Accuracy is compared with the plain historical median
+  (same month, every earlier year). **At each horizon where the model does not beat that median, the app shows the median and says so.**
+- **Next season dates:** each complete VIIRS-era season runs while the 15-day mean stays ≥ 25% of that season's peak. The app shows
+  the median start, peak and end, with a 10–90% range.
+- **Alert:** "Outlook: above-normal season likely" fires when a fire-season month in the next 3 has P(above normal) ≥ 0.8.
+  A fire-season month is one whose normal is at or above the median month.
+- **Limits:** it cannot foresee droughts or El Niño years that start from a quiet period. Before the 2015 and 2019 Riau seasons
+  the preceding months were below normal, so neither was forecast. Recent months from NRT data are flagged as provisional inputs.
+  *Statistical outlook based on past satellite data; does not include weather forecasts; not an official forecast.*
+
+## Land cover: "What is burning"
+
+`data_prep/land_cover.py` labels every hotspot with NASA MODIS **MCD12Q1 Collection 6.1** land cover
+(500 m, yearly, IGBP classification `LC_Type1`).
+
+1. **Download** (`land_cover.py fetch`): one AppEEARS area request for the Asia box (60–150°E, 11°S–55°N),
+   `MCD12Q1.061` layer `LC_Type1`, GeoTIFF in geographic projection, for each year from the year before the record
+   starts to the year before it ends. Credentials come from `EARTHDATA_USER`/`EARTHDATA_PASS` in `.env`
+   (free account at urs.earthdata.nasa.gov; log in once at appeears.earthdatacloud.nasa.gov to approve the app).
+   The task id is saved in `data_prep/data_landcover/task.json`, so a re-run resumes waiting instead of resubmitting.
+   Files that are already downloaded are skipped. AppEEARS can take hours for an area this large.
+2. **Label** (`land_cover.py label`, re-runnable): each hotspot gets the IGBP class at its location from the
+   **previous year's** map, because a fire changes the land cover it burns. When that year is missing, it uses the
+   latest earlier map, or else the earliest map. Points are processed in 1 M-row Arrow batches with NumPy, one yearly
+   map in memory at a time. It adds `land_cover` (IGBP 1–17, null when there is no value) and `lc_group` to
+   `points.parquet`, and `lc_forest … lc_other` to `cells.parquet` and `cells_0.5.parquet`. Groups are harmonized
+   like the totals: before `viirs_start` a group's hotspots are its MODIS share × k × MODIS, and after it they are
+   its VIIRS count. The groups sum to `hotspots` in every cell, which the script checks. Re-run `label` after
+   `fire_harmonize.py`, which rewrites the points.
+3. **Groups:** Forest (IGBP 1–5), Shrubland/Savanna (6–9), Grassland (10), Wetland (11), Cropland (12, and 14 =
+   cropland/natural mosaic), Other (13, 15–17, and hotspots with no map value).
+   Peatland is not a separate class: peat fires show up as forest, wetland or cropland.
+4. **Validate:** `land_cover.py report --report "Punjab-Haryana:73.8,28.4,77.6,32.6" --report "Riau:100.0,-1.2,103.9,2.95"`
+   prints the share per group. `land_cover.py spotcheck` draws 20 random hotspots and compares their stored class
+   with an independent AppEEARS **point** extraction on the native sinusoidal grid, which checks the georeferencing
+   and the previous-year rule.
+
+- **Result (Asia record, 2003-01 to 2026-10):** 46,256,197 hotspots labelled with maps from 2002 to 2025. 40 had no map value.
+  Share of harmonized hotspots by group:
+
+  | Area | Forest | Shrubland/Savanna | Grassland | Wetland | Cropland | Other |
+  |---|---|---|---|---|---|---|
+  | Asia | 27.2% | 35.0% | 11.5% | 0.3% | 24.7% | 1.4% |
+  | Punjab–Haryana (73.8–77.6°E, 28.4–32.6°N) | 0.6% | 2.3% | 0.3% | 0.0% | 96.1% | 0.7% |
+  | Riau (province outline) | 43.0% | 52.6% | 2.0% | 0.5% | 1.8% | <0.5% |
+
+  In Riau, 54% of hotspots fall on "woody savanna" and 38% on evergreen broadleaf forest. MODIS usually maps drained or degraded peat
+  forest, acacia and young oil palm as woody savanna, so peat fires show up as Shrubland/Savanna and Forest, not Wetland.
+- **Spot check:** 35 of 40 random hotspots (two draws, maps from 2002 to 2025) match AppEEARS' own point extraction on the native sinusoidal grid.
+  At the group level 38 of 40 match. In all 5 mismatches the native class is one of the adjacent pixels, which comes from reprojecting
+  to latitude/longitude at pixel edges, not from a georeferencing error.
+
 **Current record: Asia (60–150°E, 11°S–55°N), 2003-01 to 2026-10**
 - 12.44 M MODIS and 33.82 M VIIRS hotspots after cleaning; 117,685 duplicates removed.
 - VIIRS from 2012-02. Factors fitted on 2012-02 to 2021-12. Asia-wide k = 4.66. 60 tiles; 617 of 720 tile-months are fitted locally.
@@ -133,6 +227,15 @@ The frontend reads everything from the API, including the record span, factors, 
 | `GET /api/summary?bbox=&start=&end=` | total, peak month/year, busiest calendar month, latest vs median, anomaly count |
 | `GET /api/download?bbox=&start=&end=` | streamed CSV of cleaned hotspots |
 | `GET /api/download/series?bbox=` | CSV of the monthly series |
+| `GET /api/outlook?bbox=&region=` | outlook for the next 1–3 months, backtest scores, next season dates, disclaimer |
+| `GET /api/landcover?bbox=&region=&start=&end=` | hotspots and share per land-cover group, plus a plain-language summary |
+
+`/api/series`, `/api/summary`, `/api/daily`, `/api/season`, `/api/map`, `/api/scale` and `/api/cell` take `metric=frp`, which switches them
+to harmonized total FRP (MW). `/api/intensity?bbox=&region=&start=&end=` returns the mean and p90 FRP per hotspot for each sensor separately.
+
+`/api/series`, `/api/daily` and `/api/season` take `group=<key>` (`forest`, `crop`, …) to count only that fire type.
+`/api/map?lc=1` adds the dominant group per cell (`lc`, an index into `meta.land_cover.groups`, and `lc_share`).
+The hotspots CSV includes `land_cover` and `lc_group` once the points are labelled.
 
 All queries are parameterized DuckDB over Parquet. Invalid input returns a 400 error with a message.
 

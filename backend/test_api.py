@@ -13,10 +13,19 @@ cells = [{"month": f"{y}-01", "lat": 30.025, "lon": 75.025, "modis": 2, "viirs":
           "hotspots": 10.0 if y < 2006 else 100.0} for y in range(2001, 2007)]
 cells.append({"month": "2003-06", "lat": 20.025, "lon": 80.025, "modis": 5, "viirs": 0, "hotspots": 50.0})
 cells.append({"month": "2003-06", "lat": 20.075, "lon": 80.075, "modis": 1, "viirs": 0, "hotspots": 10.0})
+LC_KEYS = ["forest", "shrub", "grass", "wetland", "crop", "other"]
+for r in cells:  # land-cover split: Punjab cell all cropland; June cells 50 forest, then 4 forest + 6 other
+    split = {"crop": r["hotspots"]} if r["lat"] == 30.025 else {"forest": 50.0} if r["lon"] == 80.025 else {"forest": 4.0, "other": 6.0}
+    r.update({f"lc_{k}": split.get(k, 0.0) for k in LC_KEYS})
+    # FRP (MW): 10 per MODIS and 3 per VIIRS detection; harmonized = k_FRP x MODIS before viirs_start (tile 70,30 Jan k 2.0,
+    # June falls back to the calendar-month k 1.5), VIIRS after
+    r.update(frp_modis=10.0 * r["modis"], frp_viirs=3.0 * r["viirs"])
+    r["frp"] = r["frp_viirs"] if r["month"] >= "2004-01" else r["frp_modis"] * (2.0 if r["month"].endswith("-01") else 1.5)
 pd.DataFrame(cells).to_parquet(tmp / "cells.parquet", index=False)
 pd.DataFrame({"lat": [30.01, 20.02], "lon": [75.01, 80.02],
               "acq_date": pd.to_datetime(["2006-01-05", "2003-06-10"]), "month": ["2006-01", "2003-06"],
-              "sensor": ["VIIRS", "MODIS"], "confidence": ["n", "80"], "frp": [3.5, 9.1]}
+              "sensor": ["VIIRS", "MODIS"], "confidence": ["n", "80"], "frp": [3.5, 9.1],
+              "land_cover": pd.array([12, 2], dtype="UInt8"), "lc_group": ["crop", "forest"]}
              ).to_parquet(tmp / "points.parquet", index=False)
 (tmp / "meta.json").write_text(json.dumps({"grid_deg": 0.05, "first_month": "2001-01", "last_month": "2006-12",
                                            "last_complete_month": "2006-11", "viirs_start": "2004-01",
@@ -24,6 +33,11 @@ pd.DataFrame({"lat": [30.01, 20.02], "lon": [75.01, 80.02],
                                            "factor_by_month": {"06": 2.0}, "tile_deg": 10,
                                            "factor_by_tile": {"70,30": {"k": {"01": 5.0}, "n": {"01": 3}}},
                                            "gap_months": ["2005-01"],
+                                           "frp": {"factor_global": 1.0, "factor_by_month": {"06": 1.5},
+                                                   "factor_by_tile": {"70,30": {"k": {"01": 2.0}, "n": {"01": 3}}}},
+                                           "land_cover": {"note": "Land cover: MODIS MCD12Q1 IGBP, 500 m; peatland is not a separate class.",
+                                                          "groups": [{"key": k, "label": lab, "classes": []} for k, lab in zip(
+                                                              LC_KEYS, ["Forest", "Shrubland/Savanna", "Grassland", "Wetland", "Cropland", "Other"])]},
                                            "month_notes": {"2005-01": "VIIRS data gap (3–6 Jan)", "2006-12": "provisional (NRT data)"}}))
 import shapely  # noqa: E402
 
@@ -81,8 +95,8 @@ def test_map_regrid():
 def test_download_csv():
     r = c.get("/api/download", params={"bbox": BBOX})
     rows = list(csv.reader(io.StringIO(r.text)))
-    assert rows == [["lat", "lon", "acq_date", "sensor", "confidence", "frp"],
-                    ["30.01", "75.01", "2006-01-05", "VIIRS", "n", "3.5"]]
+    assert rows == [["lat", "lon", "acq_date", "sensor", "confidence", "frp", "land_cover", "lc_group"],
+                    ["30.01", "75.01", "2006-01-05", "VIIRS", "n", "3.5", "12", "crop"]]
     assert "attachment" in r.headers["content-disposition"]
     s = c.get("/api/download/series", params={"bbox": BBOX}).text.splitlines()
     assert s[0].startswith("month,hotspots") and len(s) == 73
@@ -187,3 +201,66 @@ def test_season_text():
 def test_top_within_selected_region():
     assert [x["name"] for x in c.get("/api/top", params={"region": "a1"}).json()] == ["Ludhiana"]
     assert c.get("/api/top", params={"bbox": "79,19,81,21"}).json() == []  # cells there have no admin unit
+
+
+def test_landcover_shares_and_text():
+    r = c.get("/api/landcover", params={"start": "2003-06", "end": "2003-06"}).json()
+    g = {x["key"]: x for x in r["groups"]}
+    assert r["total"] == 60 and g["forest"]["hotspots"] == 54 and g["forest"]["share"] == 90.0 and g["other"]["share"] == 10.0
+    assert r["text"] == "90% forest fires; 10% other." and "peatland" in r["note"]
+    p = c.get("/api/landcover", params={"region": "a1"}).json()
+    assert p["text"] == "100% cropland fires (likely crop-residue burning)."
+    assert c.get("/api/landcover", params={"bbox": "0,0,1,1"}).json()["text"] == "No hotspots in this area and period."
+    from backend.main import landcover_text
+    mixed = [{"key": k, "label": k.title(), "hotspots": v, "share": v} for k, v in [("forest", 45), ("crop", 40), ("grass", 15)]]
+    assert landcover_text(mixed) == "Mixed: 45% forest, 40% crop, 15% grass fires."
+
+
+def test_group_filter_series_daily_map():
+    crop = {r["month"]: r for r in c.get("/api/series", params={"group": "crop"}).json()}
+    forest = {r["month"]: r for r in c.get("/api/series", params={"group": "forest"}).json()}
+    assert crop["2006-01"]["hotspots"] == 100 and crop["2003-06"]["hotspots"] == 0 and forest["2003-06"]["hotspots"] == 54
+    assert crop["2006-01"]["modis"] is None  # raw sensor counts are not split by land cover
+    d = c.get("/api/daily", params={"start": "2003-06-01", "end": "2003-06-30", "group": "forest"}).json()
+    assert sum(x["hotspots"] for x in d) == 2.0
+    assert sum(x["hotspots"] for x in c.get("/api/daily", params={"start": "2003-06-01", "end": "2003-06-30", "group": "crop"}).json()) == 0
+    assert c.get("/api/series", params={"group": "peat"}).status_code == 400
+    m = c.get("/api/map", params={"start": "2003-06", "end": "2003-06", "lc": 1}).json()
+    assert sorted((x["lc"], x["lc_share"]) for x in m) == [(0, 1.0), (5, 0.6)]  # forest; other (6 of 10) beats forest (4)
+
+
+def test_frp_metric_series_summary_map_daily():
+    s = {r["month"]: r for r in c.get("/api/series", params={"bbox": BBOX, "metric": "frp"}).json()}
+    assert s["2001-01"]["hotspots"] == 40 and s["2001-01"]["modis"] == 20 and s["2001-01"]["modis_scaled"] == 40  # tile k_FRP 2.0
+    assert s["2006-01"]["hotspots"] == 30 and s["2006-01"]["viirs"] == 30
+    assert c.get("/api/summary", params={"bbox": BBOX, "metric": "frp"}).json()["total"] == 3 * 40 + 3 * 30
+    june = {r["month"]: r for r in c.get("/api/series", params={"metric": "frp"}).json()}["2003-06"]
+    assert june["modis_scaled"] == (50 + 10) * 1.5  # tile 80,20 has no k_FRP -> calendar-month k_FRP
+    m = c.get("/api/map", params={"start": "2003-06", "end": "2003-06", "metric": "frp"}).json()
+    assert sorted(x["frp"] for x in m) == [15.0, 75.0]
+    assert "frp" not in c.get("/api/map", params={"start": "2003-06", "end": "2003-06"}).json()[0]
+    d = c.get("/api/daily", params={"start": "2003-06-01", "end": "2003-06-30", "metric": "frp"}).json()
+    assert abs(sum(x["hotspots"] for x in d) - 9.1 * 1.5) < 0.11  # MODIS point FRP x calendar-month k_FRP (rounded to 0.1)
+    assert c.get("/api/season", params={"bbox": BBOX, "metric": "frp"}).json()["text"].startswith("Fires usually start")
+    assert c.get("/api/scale", params={"grid": 0.05, "metric": "frp"}).json()["q"]["0"] == 15
+    cell = c.get("/api/cell", params={"lon": 75.025, "lat": 30.025, "grid": 0.05, "start": "2006-01", "end": "2006-01", "metric": "frp"}).json()
+    assert cell["current"] == 30 and cell["median"] == 40
+
+
+def test_frp_validation_and_per_sensor_intensity():
+    assert c.get("/api/series", params={"metric": "energy"}).status_code == 400
+    assert c.get("/api/series", params={"metric": "frp", "group": "crop"}).status_code == 400
+    r = c.get("/api/intensity", params={"start": "2001-01", "end": "2006-12"}).json()
+    assert r["sensors"]["MODIS"] == {"n": 1, "mean": 9.1, "p90": 9.1, "total": 9.1}
+    assert r["sensors"]["VIIRS"]["mean"] == 3.5 and r["unit"] == "MW" and "not comparable" in r["note"]
+    assert c.get("/api/intensity", params={"region": "a2"}).json()["sensors"]["MODIS"] is None
+
+
+def test_outlook_endpoint_contract_and_alerts_still_work():
+    o = c.get("/api/outlook", params={"bbox": BBOX}).json()
+    assert o["cutoff"] == "2006-11"  # last COMPLETE month: nothing after it is used
+    assert "not an official forecast" in o["disclaimer"] and all(m["month"] > o["cutoff"] for m in o["months"])
+    assert c.get("/api/alerts", params={"asof": "2006-06-15", "bbox": BBOX}).status_code == 200
+    from backend.main import cutoff_for
+    import pandas as pd
+    assert cutoff_for(pd.Timestamp("2006-06-15")) == "2006-05" and cutoff_for(pd.Timestamp("2006-06-30")) == "2006-06"
