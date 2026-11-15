@@ -29,10 +29,10 @@ export type ScaleMode = 'fixed' | 'relative'
 // Verified against NASA GIBS WMTS (epsg3857 "best", GoogleMapsCompatible_Level8 => max zoom 8).
 const GIBS = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best'
 export const IMAGERY: Record<Imagery, { label: string; tiles: string; maxzoom: number; credit: string }> = {
-  blue: { label: 'Blue Marble', tiles: `${GIBS}/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg`, maxzoom: 8, credit: 'Imagery: NASA GIBS Blue Marble' },
-  black: { label: 'Black Marble', tiles: `${GIBS}/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png`, maxzoom: 8, credit: 'Imagery: NASA GIBS VIIRS Black Marble 2016' },
+  blue: { label: 'Blue Marble', tiles: `${GIBS}/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg`, maxzoom: 8, credit: 'Imagery: NASA Blue Marble via NASA GIBS' },
+  black: { label: 'Black Marble', tiles: `${GIBS}/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png`, maxzoom: 8, credit: 'Imagery: NASA VIIRS Black Marble 2016 via NASA GIBS' },
   // CARTO's free dark tiles now return an "API KEY REQUIRED" watermark; Esri's dark canvas needs no key.
-  dark: { label: 'Dark', tiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', maxzoom: 16, credit: 'Basemap: Esri World Dark Gray Canvas (Esri, HERE, Garmin, © OpenStreetMap contributors)' },
+  dark: { label: 'Dark', tiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', maxzoom: 16, credit: 'Basemap: Powered by Esri · Esri, HERE, Garmin, © OpenStreetMap contributors, and the GIS user community' },
 }
 
 /** Globe 0.5° (pre-aggregated file); map: 1° country scale, 0.25° regional, 0.05° local. */

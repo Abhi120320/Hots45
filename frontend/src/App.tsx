@@ -282,6 +282,10 @@ function Main({ meta }: { meta: Meta }) {
       <footer className="border-t border-line bg-bg px-4 py-1 text-[10px] text-faint flex flex-wrap gap-x-3">
         <span>Source: NASA FIRMS MCD14ML (MODIS), VNP14IMGML (VIIRS S-NPP)</span>
         <span>{IMAGERY[imagery].credit}</span>
+        <span>Boundaries: geoBoundaries (Runfola et al. 2020), incl. © OpenStreetMap contributors (ODbL), WFP/OCHA, DataMeet, ABS and others</span>
+        <span>Place search: Photon by Komoot, © OpenStreetMap contributors</span>
+        <a className="underline hover:text-dim" href="https://github.com/Abhi120320/Hots45/blob/main/CREDITS.md" target="_blank" rel="noreferrer">Credits &amp; licences</a>
+        <a className="underline hover:text-dim" href="/third-party-licenses.txt" target="_blank" rel="noreferrer">Open-source notices</a>
         <span>Hotspots are VIIRS-equivalent counts; MODIS scaled by monthly factor k (R² {meta.r2_overlap.toFixed(3)})</span>
         <span className="num">Dates UTC</span>
       </footer>

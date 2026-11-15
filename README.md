@@ -155,7 +155,20 @@ Set `GEOCODER_USER_AGENT` to identify your deployment, and `GEOCODER_URL` to use
 
 ## Data sources and credits
 
-- Active fires: NASA FIRMS. MODIS MCD14ML and VIIRS S-NPP VNP14IMGML (375 m), from https://firms.modaps.eosdis.nasa.gov/
-- Imagery: NASA GIBS Blue Marble Shaded Relief + Bathymetry, VIIRS Black Marble (2016). Dark basemap: © CARTO, © OpenStreetMap contributors.
-- Boundaries: geoBoundaries gbOpen (CC BY 4.0 / ODbL, per country). Place search: Photon by Komoot, © OpenStreetMap contributors.
-- This project is not endorsed by NASA. No NASA insignia are used.
+Full inventory with URLs and licences, including every boundary layer: [CREDITS.md](CREDITS.md). Credits that are
+required (or requested) and shown in the app footer:
+
+- **Active fires:** NASA FIRMS, MODIS MCD14ML and VIIRS S-NPP VNP14IMGML (375 m), https://firms.modaps.eosdis.nasa.gov/.
+  *We acknowledge the use of data and imagery from NASA's Fire Information for Resource Management System (FIRMS), part of NASA's ESDIS.*
+- **Imagery:** NASA Blue Marble and VIIRS Black Marble (2016) via NASA GIBS, https://gibs.earthdata.nasa.gov/.
+- **Dark basemap (required):** Powered by Esri. Esri, HERE, Garmin, © OpenStreetMap contributors, and the GIS user community.
+- **Boundaries (required):** geoBoundaries gbOpen, Runfola, D. et al. (2020) *geoBoundaries: A global database of political
+  administrative boundaries*, PLoS ONE 15(4): e0231866. Layers include © OpenStreetMap contributors (ODbL), WFP/OCHA ROAP
+  (CC BY 3.0 IGO), DataMeet India (CC BY 2.5 IN), Australian Bureau of Statistics (CC BY 4.0), Singapore URA (Singapore Open
+  Data Licence) and Wikimedia Commons contributors. The ODbL and CC BY-SA layers are share-alike: the boundary files in the
+  data release stay under those licences.
+- **Place search (required):** Photon by Komoot, https://photon.komoot.io/. Results © OpenStreetMap contributors (ODbL).
+- **Fonts:** IBM Plex Sans and IBM Plex Mono (SIL Open Font License 1.1) via Google Fonts.
+- **Libraries:** React, deck.gl, MapLibre GL JS, react-map-gl, Apache ECharts and others. Every build writes their licence
+  texts to `third-party-licenses.txt`, served by the app.
+- Hots45 is not endorsed by NASA or any data provider. No NASA insignia are used.
