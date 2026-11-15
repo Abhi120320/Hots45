@@ -5,7 +5,7 @@ import Calendar from './Calendar'
 import { downloadUrl, lineOption } from './charts'
 import BeforeAfter from './BeforeAfter'
 import type { ChartKey } from './url'
-import { areaParams, regionLabel, url, useApi, type Area, type BBox, type Intensity, type LandCover, type Meta, type Outlook, type Region, type SeriesRow, type Summary, type TopArea } from './api'
+import { areaParams, regionLabel, url, useApi, type Area, type BBox, type Intensity, type LandCover, type Loadable, type Meta, type Outlook, type Region, type SeriesRow, type Summary, type TopArea } from './api'
 import { FireTypeFilter, WhatIsBurning } from './LandCover'
 import { MetricToggle, unitOf, type Metric } from './Metric'
 import { OutlookCard } from './Outlook'
@@ -79,7 +79,7 @@ export default memo(function Panel(p: Props) {
             <MetricToggle meta={p.meta} value={p.metric} onChange={p.setMetric} />
             <State l={summary} what="summary" lines={4} />
             {met && <State l={frpSeries} what="FRP series" />}
-            {summary.data && <Kpis s={summary.data} rows={met ? frpSeries.data : rows} unit={unit} intensity={met ? inten.data : undefined} />}
+            {summary.data && <Kpis s={summary.data} rows={met ? frpSeries.data : rows} unit={unit} intensity={met ? inten : undefined} />}
           </div>
           {p.meta.land_cover && (
             <Section title="What is burning" sub="Share of hotspots by land cover in this period">
@@ -191,7 +191,7 @@ function Charts({ rows, calRows, unit, meta, onPickMonth, selected, expand, filt
   )
 }
 
-function Kpis({ s, rows, unit, intensity }: { s: Summary; rows?: SeriesRow[]; unit: string; intensity?: Intensity }) {
+function Kpis({ s, rows, unit, intensity }: { s: Summary; rows?: SeriesRow[]; unit: string; intensity?: Loadable<Intensity> }) {
   const frp = unit === 'MW'
   const u = (v: number) => `${fmt(v)}${frp ? ' MW' : ''}`
   const vs = (cur: number, med: number) => {
@@ -230,10 +230,16 @@ function Kpis({ s, rows, unit, intensity }: { s: Summary; rows?: SeriesRow[]; un
     ]
   }
   if (frp) {  // per-hotspot FRP is shown per sensor only: MODIS (1 km) and VIIRS (375 m) pixels see different fires
-    const one = (x?: Intensity['sensors']['MODIS']) => (x ? `${fmt(x.mean, 1)}` : '—')
-    const m = intensity?.sensors.MODIS, vi = intensity?.sensors.VIIRS
-    cards.push(['FRP per hotspot, per sensor', <span className="text-sm flex flex-col"><span>MODIS {one(m)} MW</span><span>VIIRS {one(vi)} MW</span></span>,
-      `mean; 90th pct ${m ? fmt(m.p90, 0) : '—'} · ${vi ? fmt(vi.p90, 0) : '—'} MW. Not comparable across sensors`])
+    // computed from the raw points (a few seconds on a cold server): say so instead of showing dashes; "—" only
+    // means that sensor has no detections in this area and period
+    const d = intensity?.data
+    const one = (x?: Intensity['sensors']['MODIS']) => (x ? `${fmt(x.mean, 1)} MW` : '—')
+    const m = d?.sensors.MODIS, vi = d?.sensors.VIIRS
+    cards.push(['FRP per hotspot, per sensor',
+      d ? <span className="text-sm flex flex-col"><span>MODIS {one(m)}</span><span>VIIRS {one(vi)}</span></span>
+        : <span className="text-sm text-dim font-sans" role="status">{intensity?.error ? 'Unavailable' : 'Loading…'}</span>,
+      d ? `mean; 90th pct ${m ? fmt(m.p90, 0) : '—'} · ${vi ? fmt(vi.p90, 0) : '—'} MW. Not comparable across sensors`
+        : intensity?.error ? `Could not load: ${intensity.error}` : 'computed from the raw hotspots'])
   }
   return (
     <KpiGrid>{cards.map(([k, v, sub]) => <Kpi key={k} label={k} value={v} sub={sub} />)}</KpiGrid>
