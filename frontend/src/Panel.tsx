@@ -232,8 +232,8 @@ function Kpis({ s, rows, unit, intensity }: { s: Summary; rows?: SeriesRow[]; un
   if (frp) {  // per-hotspot FRP is shown per sensor only: MODIS (1 km) and VIIRS (375 m) pixels see different fires
     const one = (x?: Intensity['sensors']['MODIS']) => (x ? `${fmt(x.mean, 1)}` : '—')
     const m = intensity?.sensors.MODIS, vi = intensity?.sensors.VIIRS
-    cards.push(['FRP per hotspot, per sensor', <span className="text-sm">MODIS {one(m)} · VIIRS {one(vi)}</span>,
-      `MW mean; 90th pct ${m ? fmt(m.p90, 0) : '—'} · ${vi ? fmt(vi.p90, 0) : '—'}. Not comparable across sensors`])
+    cards.push(['FRP per hotspot, per sensor', <span className="text-sm flex flex-col"><span>MODIS {one(m)} MW</span><span>VIIRS {one(vi)} MW</span></span>,
+      `mean; 90th pct ${m ? fmt(m.p90, 0) : '—'} · ${vi ? fmt(vi.p90, 0) : '—'} MW. Not comparable across sensors`])
   }
   return (
     <KpiGrid>{cards.map(([k, v, sub]) => <Kpi key={k} label={k} value={v} sub={sub} />)}</KpiGrid>
